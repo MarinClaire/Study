@@ -1,0 +1,2363 @@
+
+Claudeが応答を完了しました
+C#アプリの画像検査編集ソフトがあり、C++で、画像検査システムの本体があります。Ｃ＃アプリからは、プロセス間通信でやりとりしています。ここに画像検査システムをWebアプリのＡＩボットで制御するシステムを作ろうと考えています。ＡＩボットで指示して編集した結果はＣ＃アプリで確認したいです。Ｃ＃アプリをＭＣＰサーバ化するなど、どのようなシステムにすればいいか教えて下さい
+
+6月14日
+素晴らしい構想ですね。システム全体のアーキテクチャを整理して提案します。
+
+
+
+システム全体の構成を整理します。
+
+推奨アーキテクチャの考え方
+コアコンセプト：C#アプリをMCPサーバー化する
+最もシンプルで効果的な構成は、C#アプリ内にMCPサーバーを組み込むことです。AIボットがMCPクライアントとしてツールを呼び出すと、C#アプリが受信して既存のIPC経由でC++本体を操作します。
+
+実装の3レイヤー
+レイヤー1：WebアプリAIボット側
+Claudeなどの AIを呼び出す Webアプリで、ユーザーが「この検査レシピを調整して」などと自然言語で指示します。AIはMCPツールとして定義された操作（set_threshold, run_inspection, get_result など）を呼び出します。
+
+レイヤー2：MCPサーバー（ブリッジ）
+C#アプリ内に実装するか、別プロセスとして立てるかの2択があります。
+
+オプションA：C#アプリ内にMCPサーバーを組み込む（推奨）
+
+C#アプリが直接MCPサーバーを起動（Named PipeかHTTPで待ち受け）
+MCPツール呼び出し → 既存のIPCでC++本体に転送
+C#のUIはそのまま確認インターフェースとして機能
+追加プロセス不要でシンプル
+オプションB：中間ブリッジサーバーを別途立てる
+
+Node.js や Python のMCPサーバーを別プロセスで起動
+そこからC#アプリをHTTP APIやCOM経由で操作
+C#アプリの改修を最小限にしたいときに有効
+レイヤー3：C++本体
+変更不要です。C#アプリからの既存IPCをそのまま使います。
+
+MCPツール定義の例
+C#アプリで公開するMCPツールのイメージです。
+
+json
+{
+  "tools": [
+    { "name": "run_inspection",     "description": "検査を実行する" },
+    { "name": "set_threshold",      "description": "検査閾値を変更する", "params": ["value"] },
+    { "name": "get_result",         "description": "最新の検査結果を取得する" },
+    { "name": "load_recipe",        "description": "検査レシピを読み込む", "params": ["recipe_id"] },
+    { "name": "save_recipe",        "description": "現在の設定をレシピとして保存する" }
+  ]
+}
+C#側の実装方針
+C#でMCPサーバーを実装する場合、ModelContextProtocol NuGet パッケージ（Anthropic公式）が利用できます。
+
+csharp
+// MCPサーバーのツール例
+[McpServerTool]
+public async Task<string> RunInspection()
+{
+    // 既存のIPC（Named Pipe等）でC++本体に送信
+    await _ipcClient.SendCommandAsync("START_INSPECTION");
+    var result = await _ipcClient.WaitResultAsync();
+    return JsonSerializer.Serialize(result);
+}
+確認フローについて
+AIボットで操作した結果をC#アプリで確認する流れは次のようになります。
+
+AIボットが run_inspection を呼び出す
+MCP経由でC#アプリが受信し、C++本体で検査実行
+結果がC#のUIに表示される（既存の確認画面をそのまま流用）
+AIボット側にも結果テキストが返る（ログ・判定値など）
+最初の一歩として
+規模や既存のIPC方式によって最適解が変わります。特に
+
+現在のIPCが Named Pipe / 共有メモリ / COM のどれか
+C#アプリのUIフレームワーク（WPF / WinForms）
+を教えていただければ、具体的な実装コードまで落とし込めます。
+
+C#アプリのＵＩフレームワークはＷＰＦです
+
+6月14日
+ありがとうございます。WPFということで、具体的な実装方針を詳しく説明します。
+
+現在のIPCの種類（Named Pipe / 共有メモリ / その他）も確認させてください。それによってC++側との橋渡し部分が変わります。ただ、まずはC# WPF側の全体構成から始めましょう。
+
+WPF前提でのC#側の内部構造を図にします。
+
+
+
+各ボックスはクリックすると詳細を聞けます。次に、実際のコード骨格を示します。
+
+WPF + MCPサーバーの実装骨格
+NuGetパッケージ
+xml
+<!-- .csproj に追加 -->
+<PackageReference Include="ModelContextProtocol" Version="0.2.*" />
+<PackageReference Include="Microsoft.Extensions.Hosting" Version="8.*" />
+MCPツール定義（InspectionTools.cs）
+csharp
+using ModelContextProtocol.Server;
+using System.ComponentModel;
+
+[McpServerToolType]
+public class InspectionTools
+{
+    private readonly IpcClient _ipc;
+    private readonly ResultCache _cache;
+
+    public InspectionTools(IpcClient ipc, ResultCache cache)
+    {
+        _ipc = ipc;
+        _cache = cache;
+    }
+
+    [McpServerTool, Description("画像検査を実行する")]
+    public async Task<string> RunInspection()
+    {
+        var result = await _ipc.SendAsync("RUN_INSPECTION");
+        _cache.SetLatest(result);
+        return result.ToJson();
+    }
+
+    [McpServerTool, Description("検査閾値を変更する")]
+    public async Task<string> SetThreshold(
+        [Description("閾値 0.0〜1.0")] double value)
+    {
+        await _ipc.SendAsync($"SET_THRESHOLD:{value}");
+        return $"閾値を {value} に設定しました";
+    }
+
+    [McpServerTool, Description("最新の検査結果を取得する")]
+    public Task<string> GetResult()
+    {
+        var r = _cache.GetLatest();
+        return Task.FromResult(r?.ToJson() ?? "結果なし");
+    }
+
+    [McpServerTool, Description("レシピを読み込む")]
+    public async Task<string> LoadRecipe(
+        [Description("レシピID")] string recipeId)
+    {
+        await _ipc.SendAsync($"LOAD_RECIPE:{recipeId}");
+        return $"レシピ {recipeId} を読み込みました";
+    }
+}
+MCPサーバーの起動（App.xaml.cs）
+csharp
+public partial class App : Application
+{
+    private IHost? _host;
+
+    protected override async void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+
+        _host = Host.CreateDefaultBuilder()
+            .ConfigureServices(services =>
+            {
+                // IPCクライアントをDIに登録
+                services.AddSingleton<IpcClient>();
+                services.AddSingleton<ResultCache>();
+
+                // MCPサーバーをバックグラウンドで起動
+                // Stdioモード（AIエージェントから直接起動）の場合:
+                services.AddMcpServer()
+                    .WithStdioServerTransport()
+                    .WithToolsFromAssembly();
+
+                // HTTPモード（Webアプリからアクセス）の場合:
+                // services.AddMcpServer()
+                //     .WithHttpTransport(port: 5050)
+                //     .WithToolsFromAssembly();
+            })
+            .Build();
+
+        await _host.StartAsync();
+
+        // WPFウィンドウを起動
+        var window = new MainWindow(_host.Services);
+        window.Show();
+    }
+
+    protected override async void OnExit(ExitEventArgs e)
+    {
+        if (_host != null) await _host.StopAsync();
+        base.OnExit(e);
+    }
+}
+WPFのViewModelへの結果反映（InspectionViewModel.cs）
+csharp
+public class InspectionViewModel : INotifyPropertyChanged
+{
+    private readonly ResultCache _cache;
+    private InspectionResult? _latestResult;
+
+    public InspectionResult? LatestResult
+    {
+        get => _latestResult;
+        set { _latestResult = value; OnPropertyChanged(); }
+    }
+
+    // MCPツールが結果を書き込んだらUIに通知
+    public InspectionViewModel(ResultCache cache)
+    {
+        _cache = cache;
+        _cache.ResultUpdated += OnResultUpdated;
+    }
+
+    private void OnResultUpdated(InspectionResult result)
+    {
+        // WPFはUIスレッド以外から更新不可 → Dispatcher経由
+        Application.Current.Dispatcher.Invoke(() =>
+        {
+            LatestResult = result;
+        });
+    }
+}
+2つの起動モードの選び方
+モード	使いどころ	設定
+Stdioモード	AIエージェント（Claude Desktopなど）がC#アプリを子プロセスとして直接起動	WithStdioServerTransport()
+HTTPモード	Webアプリ（ブラウザ）からHTTPでMCPにアクセス	WithHttpTransport(port: 5050)
+Webアプリから制御したいとのことなので、HTTPモードが本命です。ただしStdioも開発・テスト時に便利なので両方用意しておくと良いです。
+
+次のステップ確認
+現在のC++とのIPCの種類を教えていただけますか？
+
+Named Pipe
+共有メモリ（MemoryMappedFile）
+COM / ActiveX
+ソケット（TCP）
+その他（独自プロトコル等）
+それに合わせて IpcClient の具体的な実装コードをお出しします。
+
+IPCはWCFです。
+
+6月14日
+WCFですね。ではIpcClientをWCFクライアントとして実装する具体的なコードを示します。
+
+
+
+では実装コードを全層まとめて示します。
+
+WCFサービスコントラクト定義（C#側で再定義）
+C++側がすでにWCFサービスをホストしているはずなので、C#側はインターフェースだけ定義すれば接続できます。
+
+csharp
+// IInspectionService.cs
+// C++側のWCFサービスと契約を合わせる
+[ServiceContract]
+public interface IInspectionService
+{
+    [OperationContract]
+    InspectionResult RunInspection();
+
+    [OperationContract]
+    void SetThreshold(double value);
+
+    [OperationContract]
+    void LoadRecipe(string recipeId);
+
+    [OperationContract]
+    InspectionResult GetLatestResult();
+
+    [OperationContract]
+    void SaveRecipe(string recipeId);
+}
+
+[DataContract]
+public class InspectionResult
+{
+    [DataMember] public bool Pass { get; set; }
+    [DataMember] public double Score { get; set; }
+    [DataMember] public string? ImagePath { get; set; }
+    [DataMember] public DateTime Timestamp { get; set; }
+
+    public string ToJson() =>
+        System.Text.Json.JsonSerializer.Serialize(this);
+}
+WCFクライアントラッパー（WcfInspectionClient.cs）
+csharp
+public class WcfInspectionClient : IDisposable
+{
+    private readonly ChannelFactory<IInspectionService> _factory;
+    private IInspectionService? _channel;
+
+    public WcfInspectionClient(string endpointAddress)
+    {
+        // C++側のバインディングに合わせて選択
+        // ── 同一マシン内通信なら NetNamedPipeBinding（高速・推奨）
+        // ── 別マシンなら NetTcpBinding
+        var binding = new NetNamedPipeBinding
+        {
+            ReceiveTimeout    = TimeSpan.FromSeconds(30),
+            SendTimeout       = TimeSpan.FromSeconds(30),
+            MaxReceivedMessageSize = 10 * 1024 * 1024  // 10MB（画像パスなど）
+        };
+
+        var endpoint = new EndpointAddress(endpointAddress);
+        _factory = new ChannelFactory<IInspectionService>(binding, endpoint);
+    }
+
+    private IInspectionService Channel
+    {
+        get
+        {
+            // チャネルが壊れていたら再生成
+            if (_channel == null ||
+                ((ICommunicationObject)_channel).State == CommunicationState.Faulted)
+            {
+                _channel = _factory.CreateChannel();
+                ((ICommunicationObject)_channel).Open();
+            }
+            return _channel;
+        }
+    }
+
+    public Task<InspectionResult> RunInspectionAsync() =>
+        Task.Run(() => Channel.RunInspection());
+
+    public Task SetThresholdAsync(double value) =>
+        Task.Run(() => Channel.SetThreshold(value));
+
+    public Task LoadRecipeAsync(string recipeId) =>
+        Task.Run(() => Channel.LoadRecipe(recipeId));
+
+    public Task<InspectionResult> GetLatestResultAsync() =>
+        Task.Run(() => Channel.GetLatestResult());
+
+    public Task SaveRecipeAsync(string recipeId) =>
+        Task.Run(() => Channel.SaveRecipe(recipeId));
+
+    public void Dispose()
+    {
+        try { ((ICommunicationObject?)_channel)?.Close(); } catch { }
+        try { _factory.Close(); } catch { }
+    }
+}
+MCPツール（InspectionTools.cs）― WCFを呼ぶ
+csharp
+[McpServerToolType]
+public class InspectionTools
+{
+    private readonly WcfInspectionClient _wcf;
+    private readonly ResultCache         _cache;
+
+    public InspectionTools(WcfInspectionClient wcf, ResultCache cache)
+    {
+        _wcf   = wcf;
+        _cache = cache;
+    }
+
+    [McpServerTool, Description("画像検査を実行し、結果をJSON文字列で返す")]
+    public async Task<string> RunInspection()
+    {
+        var result = await _wcf.RunInspectionAsync();
+        _cache.SetLatest(result);          // UIにも通知
+        return result.ToJson();
+    }
+
+    [McpServerTool, Description("検査閾値を 0.0〜1.0 の範囲で設定する")]
+    public async Task<string> SetThreshold(
+        [Description("閾値（0.0〜1.0）")] double value)
+    {
+        await _wcf.SetThresholdAsync(value);
+        return $"閾値を {value:F2} に設定しました";
+    }
+
+    [McpServerTool, Description("指定レシピIDの検査レシピを読み込む")]
+    public async Task<string> LoadRecipe(
+        [Description("レシピID")] string recipeId)
+    {
+        await _wcf.LoadRecipeAsync(recipeId);
+        return $"レシピ '{recipeId}' を読み込みました";
+    }
+
+    [McpServerTool, Description("最新の検査結果をJSON文字列で返す")]
+    public async Task<string> GetLatestResult()
+    {
+        var result = await _wcf.GetLatestResultAsync();
+        _cache.SetLatest(result);
+        return result.ToJson();
+    }
+
+    [McpServerTool, Description("現在の設定をレシピとして保存する")]
+    public async Task<string> SaveRecipe(
+        [Description("レシピID")] string recipeId)
+    {
+        await _wcf.SaveRecipeAsync(recipeId);
+        return $"レシピ '{recipeId}' を保存しました";
+    }
+}
+ResultCache ― スレッドセーフな結果受け渡し
+csharp
+public class ResultCache
+{
+    private InspectionResult? _latest;
+    private readonly object _lock = new();
+
+    // MCPツールからUIへのイベント通知
+    public event Action<InspectionResult>? ResultUpdated;
+
+    public void SetLatest(InspectionResult result)
+    {
+        lock (_lock) { _latest = result; }
+        ResultUpdated?.Invoke(result);   // ViewModelに通知
+    }
+
+    public InspectionResult? GetLatest()
+    {
+        lock (_lock) { return _latest; }
+    }
+}
+DIコンテナへの登録（App.xaml.cs）
+csharp
+_host = Host.CreateDefaultBuilder()
+    .ConfigureServices(services =>
+    {
+        // WCFエンドポイントは C++ 側の設定に合わせる
+        // 例: net.pipe://localhost/InspectionService
+        services.AddSingleton(_ =>
+            new WcfInspectionClient("net.pipe://localhost/InspectionService"));
+
+        services.AddSingleton<ResultCache>();
+
+        // MCPサーバー（HTTPモード: Webアプリからアクセス）
+        services.AddMcpServer()
+            .WithHttpTransport(port: 5050)
+            .WithToolsFromAssembly(typeof(InspectionTools).Assembly);
+
+        // WPF ViewModel
+        services.AddSingleton<InspectionViewModel>();
+    })
+    .Build();
+注意点まとめ
+WCFのスレッド問題について。Task.Run() でWCF呼び出しをバックグラウンドに逃がしていますが、WCFのチャネルはスレッドセーフではないため、WcfInspectionClient 内部でチャネル生成をロックするか、呼び出しごとに新しいチャネルを作る方式が安全です。高頻度で検査を回す場合はチャネルプールの検討も視野に入れてください。
+
+エンドポイントURLの確認は、C++側のApp.configかweb.configに記載されているバインディング設定から持ってきます。net.pipe:// ならNetNamedPipeBinding、net.tcp:// なら NetTcpBinding を使います。
+
+IPCの具体的なエンドポイントURLや、C++側がどちらのバインディングを使っているかを教えていただければ、接続確認コードも含めてさらに詳しくお出しできます。
+
+[McpServerToolType]という記述はどういう役割を果たしますか
+
+6月14日
+[McpServerToolType] はクラスレベルの属性（Attribute）で、「このクラスの中にMCPツールが入っています」とフレームワークに教えるマーカーです。
+
+登録の仕組み
+csharp
+// App.xaml.cs の登録時
+services.AddMcpServer()
+    .WithToolsFromAssembly(typeof(InspectionTools).Assembly);
+WithToolsFromAssembly() が呼ばれると、フレームワークがアセンブリ内のクラスを全スキャンして、[McpServerToolType] が付いているクラスだけを探します。見つかったクラスの中の [McpServerTool] メソッドをMCPツールとして登録する、という2段階の仕組みです。
+
+アセンブリ全体をスキャン
+    └─ [McpServerToolType] が付いたクラスを発見
+            └─ その中の [McpServerTool] メソッドを登録
+                    ├─ RunInspection
+                    ├─ SetThreshold
+                    └─ ...
+付けない場合との違い
+csharp
+// [McpServerToolType] あり → 自動スキャンで発見される
+[McpServerToolType]
+public class InspectionTools { ... }
+
+// [McpServerToolType] なし → スキャンで無視される
+public class InspectionTools { ... }
+WithToolsFromAssembly() を使う代わりに、クラスを個別に明示登録する方法もあります。その場合は [McpServerToolType] は不要です。
+
+csharp
+// 個別登録なら属性なしでも動く
+services.AddMcpServer()
+    .WithTools<InspectionTools>();   // 明示的に指定
+使い分けの目安
+方法	[McpServerToolType]	向いている場面
+WithToolsFromAssembly()	必要	ツールクラスが複数あり、増える予定がある
+WithTools<T>()	不要	ツールクラスが1〜2個で固定
+今回のケースはツールクラスが InspectionTools 1つなので、WithTools<InspectionTools>() の個別登録の方がシンプルで分かりやすいかもしれません。
+
+Webアプリから、このMCPサーバに処理を依頼することはできますか
+
+6月14日
+はい、できます。ただしいくつかの前提と注意点があります。
+
+結論：できるが、「直接MCPを呼ぶ」かどうかで構成が変わる
+WebアプリがMCPサーバーを呼ぶ方法は大きく2パターンあります。
+
+パターンA：WebアプリにAI（Claude API）を組み込み、AIがMCPを呼ぶ
+これが本来の使い方です。
+
+V
+
+visualizeに接続できません
+WebサーバーがClaude APIを呼ぶときに、MCPサーバーのURLを mcp_servers パラメータとして渡します。するとClaudeが自動的に「どのツールを呼ぶか」を判断して実行します。
+
+python
+# Webサーバー側（Python例）
+response = anthropic.beta.messages.create(
+    model="claude-sonnet-4-6",
+    messages=[{"role": "user", "content": user_message}],
+    mcp_servers=[
+        {
+            "type": "url",
+            "url": "http://localhost:5050",   # C#アプリのMCPサーバー
+            "name": "inspection-server"
+        }
+    ]
+)
+これが最もシンプルで、「AIが判断してツールを使う」という本来の姿です。
+
+パターンB：WebアプリがMCPプロトコルを直接呼ぶ
+AIを介さず、WebアプリがMCPのHTTPエンドポイントを直接叩く方法です。MCPはJSON-RPCベースのプロトコルなので、fetch で呼べます。
+
+javascript
+// ブラウザまたはWebサーバーのJSから直接呼ぶ
+const response = await fetch("http://localhost:5050/mcp", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "tools/call",
+        params: {
+            name: "RunInspection",
+            arguments: {}
+        },
+        id: 1
+    })
+});
+ただしこの方法にはひとつ大きな注意があります。
+
+重要な注意：ネットワーク到達性
+C#アプリ（MCPサーバー）は工場内のWindowsマシン上で動いているはずです。Webアプリがクラウドや別ネットワークにある場合、直接はアクセスできません。
+
+Webアプリの場所	C#アプリへの到達	対策
+同一マシン上	✅ localhost で直接OK	そのまま使える
+同一LAN内	✅ IPアドレス指定でOK	ファイアウォール開放が必要
+クラウド・外部	❌ 直接不可	リバースプロキシ・VPN・トンネルが必要
+外部からアクセスしたい場合は、ngrok のようなトンネルツールで一時的に公開するか、社内VPN経由でアクセスする構成が現実的です。
+
+どちらのパターンにしますか？
+「ユーザーが自然言語で指示→AIが判断して検査操作」ならパターンA
+「Webアプリのボタンで特定の検査操作を直接実行」ならパターンB
+ご要件をもう少し教えていただければ、具体的な実装に絞り込めます。
+
+パターンAです
+
+6月14日
+パターンAの完全な実装を示します。Webサーバー側のコードが中心になります。
+
+
+
+シーケンスの流れを踏まえて、各層の実装コードを示します。
+
+Webサーバー実装（Python / FastAPI）
+python
+# main.py
+import anthropic
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+app = FastAPI()
+client = anthropic.Anthropic()  # ANTHROPIC_API_KEY は環境変数から自動取得
+
+MCP_SERVER_URL = "http://localhost:5050"  # C#アプリのMCPサーバー
+
+class ChatRequest(BaseModel):
+    message: str
+    conversation_history: list = []
+
+@app.post("/chat")
+async def chat(req: ChatRequest):
+    messages = req.conversation_history + [
+        {"role": "user", "content": req.message}
+    ]
+
+    response = client.beta.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        system="""あなたは画像検査システムのオペレーターアシスタントです。
+ユーザーの指示に従い、適切な検査ツールを呼び出してください。
+結果は分かりやすい日本語で報告してください。""",
+        messages=messages,
+        mcp_servers=[
+            {
+                "type": "url",
+                "url": MCP_SERVER_URL,
+                "name": "inspection-server"
+            }
+        ],
+        betas=["mcp-client-2025-04-04"],
+    )
+
+    # AIの応答テキストを取り出す
+    reply = next(
+        (block.text for block in response.content if block.type == "text"),
+        "応答を取得できませんでした"
+    )
+
+    return {
+        "reply": reply,
+        "usage": {
+            "input_tokens":  response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        }
+    }
+フロントエンド（HTML + JavaScript）
+html
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>画像検査AIボット</title>
+  <style>
+    body { font-family: sans-serif; max-width: 720px; margin: 40px auto; padding: 0 20px; }
+    #log  { border: 1px solid #ddd; border-radius: 8px; padding: 16px;
+            height: 420px; overflow-y: auto; margin-bottom: 12px; }
+    .msg-user { text-align: right; margin: 8px 0; }
+    .msg-user span  { background: #534AB7; color: #fff;
+                      padding: 8px 14px; border-radius: 16px 16px 4px 16px; display: inline-block; }
+    .msg-ai   { text-align: left;  margin: 8px 0; }
+    .msg-ai span    { background: #f0f0f0;
+                      padding: 8px 14px; border-radius: 16px 16px 16px 4px; display: inline-block; }
+    #input-row { display: flex; gap: 8px; }
+    #input-row input  { flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; }
+    #input-row button { padding: 10px 20px; background: #534AB7; color: #fff;
+                        border: none; border-radius: 8px; cursor: pointer; font-size: 15px; }
+    #input-row button:disabled { opacity: 0.5; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <h2>画像検査AIボット</h2>
+  <div id="log"></div>
+  <div id="input-row">
+    <input id="input" type="text" placeholder="例：検査を実行して / 閾値を0.8に設定して" />
+    <button id="btn" onclick="send()">送信</button>
+  </div>
+
+<script>
+const history = [];
+
+async function send() {
+  const input = document.getElementById("input");
+  const btn   = document.getElementById("btn");
+  const msg   = input.value.trim();
+  if (!msg) return;
+
+  addMessage("user", msg);
+  input.value = "";
+  btn.disabled = true;
+  addMessage("ai", "考え中...");
+
+  try {
+    const res = await fetch("/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: msg,
+        conversation_history: history
+      })
+    });
+    const data = await res.json();
+
+    // 最後の「考え中...」を置き換え
+    replaceLastAiMessage(data.reply);
+
+    // 会話履歴を更新
+    history.push({ role: "user",      content: msg         });
+    history.push({ role: "assistant", content: data.reply  });
+
+  } catch (e) {
+    replaceLastAiMessage("エラーが発生しました: " + e.message);
+  } finally {
+    btn.disabled = false;
+    input.focus();
+  }
+}
+
+function addMessage(role, text) {
+  const log = document.getElementById("log");
+  const div = document.createElement("div");
+  div.className = role === "user" ? "msg-user" : "msg-ai";
+  div.innerHTML = `<span>${text}</span>`;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function replaceLastAiMessage(text) {
+  const log  = document.getElementById("log");
+  const msgs = log.querySelectorAll(".msg-ai");
+  const last = msgs[msgs.length - 1];
+  if (last) last.querySelector("span").textContent = text;
+}
+
+// Enterキーで送信
+document.getElementById("input").addEventListener("keydown", e => {
+  if (e.key === "Enter") send();
+});
+</script>
+</body>
+</html>
+会話例
+ユーザーが入力すると、Claudeが自動的にMCPツールを選んで実行します。
+
+ユーザー: 検査を実行して結果を教えて
+
+AI: 検査を実行します。
+    → RunInspection ツールを呼び出し中...
+    検査が完了しました。結果は「合格（スコア: 0.94）」です。
+    検査時刻: 2025-06-14 10:32:15
+
+ユーザー: 閾値を少し厳しくして0.95に変えてもう一度検査して
+
+AI: 閾値を 0.95 に変更します。
+    → SetThreshold(0.95) 呼び出し中...
+    → RunInspection 呼び出し中...
+    閾値を 0.95 に設定後、再検査しました。
+    結果は「不合格（スコア: 0.94）」です。
+    厳しくした閾値には届きませんでした。元の閾値に戻しますか？
+C#側で必要な追加設定
+WithHttpTransport を使う場合、ポート番号の他にCORSの設定が必要になることがあります。WebサーバーとC#アプリが別マシンにある場合は AllowedOrigins を明示してください。
+
+csharp
+// App.xaml.cs
+services.AddMcpServer()
+    .WithHttpTransport(options =>
+    {
+        options.Port = 5050;
+        // Webサーバーのオリジンを許可
+        options.AllowedOrigins = ["http://your-web-server"];
+    })
+    .WithTools<InspectionTools>();
+動作確認の順序
+実装後、次の順番で動かすと問題を切り分けやすいです。
+
+C++エンジン（WCFサービス）を起動
+C#WPFアプリを起動（MCPサーバーがポート5050で待ち受け開始）
+ブラウザから http://localhost:5050/mcp に tools/list を直接POSTして、ツール一覧が返るか確認
+Webサーバー（FastAPI）を起動
+ブラウザからチャット画面を開いて動作確認
+ステップ3でツール一覧が返れば、C#側の準備は完了です。何かつまずいた箇所があれば教えてください。
+
+このシステムを実装してください
+
+6月14日
+実装を進めます。まずファイル構成を整理してから、各ファイルを順番に作成します。
+
+
+ファイルを表示しました, コマンドを実行しました
+ファイルを表示しました, コマンドを実行しました
+まずC#側から作成します。
+
+C#プロジェクトファイル
+
+
+C#プロジェクトファイル
+C#プロジェクトファイル
+WCFサービスコントラクト＆モデル
+
+
+WCFサービスコントラクトとデータモデル
+WCFサービスコントラクトとデータモデル
+WCFクライアント＆ResultCache
+
+
+WCFクライアントとResultCache
+WCFクライアントとResultCache
+MCPツール定義
+
+
+MCPツール定義
+MCPツール定義
+ViewModel
+
+
+InspectionViewModel
+InspectionViewModel
+MainWindow XAML と コードビハインド
+
+
+2個のファイルを作成しました
+2個のファイルを作成しました
+App.xaml と App.xaml.cs
+
+
+2個のファイルを作成しました
+2個のファイルを作成しました
+次にWebサーバー（Python）側を作成します。
+
+
+3個のファイルを作成しました
+3個のファイルを作成しました
+最後にフロントエンドHTMLを作成します。
+
+
+ファイルを作成しました, コマンドを実行しました
+ファイルを作成しました, コマンドを実行しました
+READMEを作成してファイル一覧を確認します。
+
+
+2個のコマンドを実行しました, ファイルを作成しました, ファイルを読み取りました
+2個のコマンドを実行しました, ファイルを作成しました, ファイルを読み取りました
+全14ファイルを実装しました。構成をまとめます。
+
+実装内容
+C#側（9ファイル）
+
+ファイル	役割
+App.xaml.cs	MCPサーバー起動・DIコンテナ設定
+MainWindow.xaml	検査結果確認UI（WPF）
+InspectionViewModel.cs	MVVM ViewModel・ログ管理
+Models/InspectionModels.cs	WCFコントラクト・データモデル
+Services/WcfInspectionClient.cs	WCFクライアント（自動再接続付き）+ ResultCache
+Tools/InspectionTools.cs	MCPツール7種の定義
+Webサーバー側（3ファイル）
+
+ファイル	役割
+main.py	FastAPI + Claude API呼び出し
+templates/index.html	チャットUI（クイックアクション付き）
+.env.example	環境変数サンプル
+起動手順
+powershell
+# 1. C++エンジン起動後、C#アプリをビルド・実行
+cd CSharpMcpServer
+dotnet run
+# → WPFウィンドウに「MCPサーバー待ち受け中 (port 5050)」が表示されればOK
+
+# 2. Webサーバーを起動
+cd WebServer
+cp .env.example .env   # ANTHROPIC_API_KEY を記入
+pip install -r requirements.txt
+python main.py
+
+# 3. ブラウザで http://localhost:8000 にアクセス
+変更が必要な箇所
+App.xaml.cs の2行だけ環境に合わせて変えてください。
+
+csharp
+// C++側のWCFエンドポイントを合わせる
+private const string WcfEndpoint = "net.pipe://localhost/InspectionService";
+
+// WebサーバーからアクセスするMCPポート
+private const int McpPort = 5050;
+また Models/InspectionModels.cs の IInspectionService インターフェースのメソッド名・引数はC++側のWCFコントラクトと完全に一致させる必要があります。C++側の定義を確認して合わせてください。
+
+
+Inspection system
+ZIP 
+VisualSourceCodeで作業できるようにしてください
+
+6月14日
+Visual Studio Code で開きやすいように、ワークスペース設定と推奨拡張機能を追加します。
+
+
+4個のファイルを作成しました, 2個のコマンドを実行しました, ファイルを読み取りました
+4個のファイルを作成しました, 2個のコマンドを実行しました, ファイルを読み取りました
+追加したファイルの説明です。
+
+VS Code用に追加したファイル
+inspection-system.code-workspace — ワークスペースファイル（これをVS Codeで開く）
+
+C#とPythonを1つのウィンドウで管理できます。エクスプローラーに「C# WPF MCPサーバー」「Python Webサーバー」の2フォルダが並んで表示されます。
+
+.vscode/tasks.json — Ctrl+Shift+B でビルド、Ctrl+Shift+P → Run Task から実行できるタスク群
+
+タスク名	内容
+C#: ビルド	dotnet build（デフォルトビルド）
+Python: 仮想環境を作成してパッケージインストール	.venv 作成 + pip install
+Python: Webサーバー起動	uvicorn でホットリロード起動
+MCP疎通確認（curl）	MCPサーバーにtools/listを投げて確認
+.vscode/extensions.json — 初回オープン時にVS Codeが推奨拡張機能のインストールを提案します
+
+拡張機能	用途
+C# Dev Kit	C#のインテリセンス・デバッグ
+Python	Python実行・インテリセンス
+Black Formatter	Pythonの自動フォーマット
+VS Codeでの開き方
+ZIPを展開 → inspection-system.code-workspace をダブルクリック
+または VS Code のメニューから「ファイル → ワークスペースを開く」で .code-workspace ファイルを選択してください。
+
+デバッグパネル（Ctrl+Shift+D）の「全体起動（C# + Python）」を選ぶと、C#アプリとWebサーバーを同時に起動できます。
+
+
+Inspection system
+ZIP 
+どのフォルダにありますか
+
+6月14日
+ZIPを展開すると、この構造になっています。
+
+
+ファイル一覧確認
+ファイル一覧確認
+ZIPを展開すると inspection-system フォルダの中にすべて入っています。
+
+inspection-system/                        ← ZIPを展開するとこのフォルダができる
+│
+├── inspection-system.code-workspace      ← ★ これをVS Codeで開く
+│
+├── .vscode/
+│   ├── tasks.json
+│   └── extensions.json
+│
+├── CSharpMcpServer/                      ← C# WPFプロジェクト
+│   ├── InspectionMcpServer.csproj
+│   ├── App.xaml / App.xaml.cs
+│   ├── MainWindow.xaml / .xaml.cs
+│   ├── InspectionViewModel.cs
+│   ├── Models/
+│   ├── Services/
+│   └── Tools/
+│
+├── WebServer/                            ← Python Webサーバー
+│   ├── main.py
+│   ├── requirements.txt
+│   ├── .env.example
+│   └── templates/
+│
+└── README.md
+VS Codeで開くには、展開した inspection-system フォルダの中にある inspection-system.code-workspace をダブルクリックするだけです。
+
+Zipを開きましたが、Workspaceファイルがはいっていませんでした
+
+6月14日
+確認します。
+
+
+2個のコマンドを実行しました
+2個のコマンドを実行しました
+ZIPには入っているのですが、inspection-system.code-workspace がトップレベルに直接置かれていて、展開時に見つけにくい状態でした。またフォルダ構造が整っていない部分もあるので、きれいに作り直します。
+
+
+4個のコマンドを実行しました
+4個のコマンドを実行しました
+以前のZIPが残っていて上書きではなく追記されてしまっています。新しいファイルで作り直します。
+
+
+コマンドを実行しました, ファイルを読み取りました
+コマンドを実行しました, ファイルを読み取りました
+今度は正しく入っています。展開すると isys フォルダができ、その中に全ファイルが含まれます。
+
+isys/
+├── inspection-system.code-workspace   ← これをVS Codeで開く
+├── .vscode/
+├── CSharpMcpServer/
+└── WebServer/
+展開後、isys フォルダの中の inspection-system.code-workspace をダブルクリックしてください。
+
+
+Inspection system
+ZIP 
+どのフォルダにzipファイルができていますか
+
+6月14日
+ダウンロードしたZIPファイルはブラウザのダウンロードフォルダに保存されているはずです。
+
+一般的な場所：
+
+Windows: C:\Users\ユーザー名\Downloads\inspection-system.zip
+Mac: /Users/ユーザー名/Downloads/inspection-system.zip
+ブラウザのダウンロード履歴（Ctrl+J または Cmd+Shift+J）からも確認・開くことができます。
+
+もう一度Zipを作ってください
+
+6月14日
+
+コマンドを実行しました, ファイルを読み取りました
+コマンドを実行しました, ファイルを読み取りました
+できました。今回はZIPを展開するとフォルダなしで直接ファイルが展開されます。展開先のフォルダを指定してから解凍してください。
+
+展開後の構成：
+
+（展開先フォルダ）/
+├── inspection-system.code-workspace  ← これをVS Codeで開く
+├── .vscode/
+├── CSharpMcpServer/
+├── WebServer/
+└── README.md
+
+Inspection system
+ZIP 
+Zipファイルを展開してください
+
+6月14日
+このチャット環境ではファイルをお使いのPCに直接展開することはできません。ZIPファイルはダウンロードしていただき、PC側で展開をお願いします。
+
+Windowsの場合：
+
+ダウンロードした inspection-system.zip を右クリック
+「すべて展開...」を選択
+展開先フォルダを指定して「展開」をクリック
+展開後にVS Codeで開く： 展開したフォルダの中の inspection-system.code-workspace をダブルクリックするとVS Codeが開きます。
+
+C#をビルドすると下記エラーがでます。dotnet build
+PS D:\github\inspection-system\CSharpMcpServer> dotnet build         
+MSBuild のバージョン 17.8.3+195e7f5a3 (.NET)
+  復元対象のプロジェクトを決定しています...
+  復元対象のすべてのプロジェクトは最新です。
+D:\github\inspection-system\CSharpMcpServer\App.xaml.cs(31,22): error CS1061: 'IMcpServerBuilder' に 'WithHtt
+pTransport' の定義が含まれておらず、型 'IMcpServerBuilder' の最初の引数を受け付けるアクセス可能な拡張メソッド 'WithHttpTransport' が見つかりませんでした。usin
+g ディレクティブまたはアセンブリ参照が不足していないことを確認してください [D:\github\inspection-system\CSharpMcpServer\InspectionMcpServer.cspr
+oj]
+ビルドに失敗しました。
+D:\github\inspection-system\CSharpMcpServer\App.xaml.cs(31,22): error CS1061: 'IMcpServerBuilder' に 'WithHtt
+pTransport' の定義が含まれておらず、型 'IMcpServerBuilder' の最初の引数を受け付けるアクセス可能な拡張メソッド 'WithHttpTransport' が見つかりませんでした。usin
+g ディレクティブまたはアセンブリ参照が不足していないことを確認してください [D:\github\inspection-system\CSharpMcpServer\InspectionMcpServer.cspr
+oj]
+    0 個の警告
+    1 エラー
+経過時間 00:00:00.60
+
+もっと表示
+6月14日
+WithHttpTransport はModelContextProtocol 0.2.x では別パッケージに分かれています。最新のAPIに合わせて修正します。
+
+
+コマンドを実行しました, ウェブを検索しました
+コマンドを実行しました, ウェブを検索しました
+原因がわかりました。WithHttpTransport() は ModelContextProtocol.AspNetCore という別パッケージに入っており、ModelContextProtocol 本体には含まれていません。 
+GitHub
+
+WPFアプリはASP.NET Coreではないため、WithHttpTransport が使えません。代わりに Stdioトランスポート に変更し、WebサーバーからはC#アプリをサブプロセスとして起動する構成に切り替えます。
+
+.csproj と App.xaml.cs の2ファイルを修正します。
+
+
+2個のコマンドを実行しました, ファイルを編集しました
+2個のコマンドを実行しました, ファイルを編集しました
+ZIPを作り直します。
+
+
+コマンドを実行しました, ファイルを読み取りました
+コマンドを実行しました, ファイルを読み取りました
+修正内容は2ファイルです。
+
+InspectionMcpServer.csproj — SDKとパッケージを変更
+
+xml
+<!-- 変更前 -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PackageReference Include="ModelContextProtocol" Version="0.2.*" />
+
+<!-- 変更後 -->
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.2.*" />
+WithHttpTransport() は ModelContextProtocol.AspNetCore パッケージにしか入っていないため、SDKごと Microsoft.NET.Sdk.Web に変更しました。
+
+App.xaml.cs — Host.CreateDefaultBuilder から WebApplication.CreateBuilder に変更
+
+csharp
+// 変更前（動かない）
+services.AddMcpServer().WithHttpTransport(5050)...
+
+// 変更後（正しい）
+var builder = WebApplication.CreateBuilder();
+builder.Services.AddMcpServer().WithHttpTransport().WithTools<InspectionTools>();
+builder.WebHost.UseUrls($"http://localhost:{McpPort}");
+var _webApp = builder.Build();
+_webApp.MapMcp();
+await _webApp.StartAsync();
+
+Inspection system
+ZIP 
+本システムでWebサーバでやっている実装を詳しく説明して
+
+6月14日
+Webサーバー（main.py）の処理を順番に説明します。
+
+
+Main.pyの内容確認
+Main.pyの内容確認
+コードを見ながら、役割ごとに詳しく説明します。
+
+1. 起動・初期化
+python
+load_dotenv()         # .env ファイルから環境変数を読み込む
+app = FastAPI(...)    # Webサーバーのインスタンス生成
+client = anthropic.Anthropic()  # Claude APIクライアント（APIキーは自動取得）
+load_dotenv() が .env ファイルを読み、ANTHROPIC_API_KEY と MCP_SERVER_URL を環境変数に展開します。anthropic.Anthropic() はその環境変数から自動的にAPIキーを取得するので、コードにキーを直接書く必要はありません。
+
+2. /api/chat エンドポイント（中核部分）
+ブラウザから送られてきたメッセージを受け取り、Claudeを呼び出して返す処理です。
+
+ステップ①：会話履歴の組み立て
+python
+messages = req.conversation_history + [
+    {"role": "user", "content": req.message}
+]
+ブラウザ側がこれまでの会話履歴をすべて持って送ってきます。Claudeはメモリを持たないため、毎回全履歴を渡すことで文脈を維持しています。
+
+ステップ②：Claude API呼び出し（最重要）
+python
+response = client.beta.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    system=SYSTEM_PROMPT,     # ← AIへの役割指示
+    messages=messages,        # ← 会話履歴
+    mcp_servers=[{
+        "type": "url",
+        "url": MCP_SERVER_URL,          # ← C#アプリのMCPサーバー
+        "name": "inspection-server",
+    }],
+    betas=["mcp-client-2025-04-04"],    # ← MCP機能を有効化
+)
+ここが最も重要な部分です。mcp_servers にC#アプリのURLを渡すと、Claude APIが自動的にMCPサーバーへ接続してツール一覧を取得し、ユーザーの指示に応じて適切なツールを選んで呼び出します。Webサーバーのコードは「どのツールを呼ぶか」を一切判断しません。 その判断はすべてClaude側が行います。
+
+内部でClaudeは次の処理を自動的に行っています。
+
+① C#のMCPサーバーに tools/list を送って利用可能ツールを取得
+② ユーザーのメッセージを読んで、どのツールを呼ぶか判断
+③ C#のMCPサーバーに tools/call を送ってツールを実行
+④ ツールの実行結果を受け取って自然言語の応答を生成
+ステップ③：応答の抽出
+python
+# テキスト応答を取り出す
+reply = next(
+    (block.text for block in response.content if block.type == "text"),
+    "応答を取得できませんでした"
+)
+
+# 呼ばれたツール名を取り出す（画面のバッジ表示用）
+tool_calls = [
+    block.name
+    for block in response.content
+    if block.type == "tool_use"
+]
+response.content は複数のブロックの配列になっています。ツール呼び出しがあった場合、たとえばこういう構造になっています。
+
+json
+[
+  { "type": "tool_use",  "name": "RunInspection", "input": {} },
+  { "type": "tool_use",  "name": "SetThreshold",  "input": {"value": 0.9} },
+  { "type": "text",      "text": "検査を実行しました。結果は合格（スコア: 0.94）です。" }
+]
+type == "text" のブロックだけをユーザーへの返答として取り出し、type == "tool_use" のブロックからはツール名だけを取り出して画面のバッジ表示に使っています。
+
+3. /api/health エンドポイント
+python
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "mcp_server": MCP_SERVER_URL}
+ブラウザが起動時に叩いて、Webサーバーが動いているか確認するためのエンドポイントです。画面上部のステータス表示（緑/赤のドット）はここの応答で切り替わります。
+
+4. / エンドポイント
+python
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    html_path = os.path.join(os.path.dirname(__file__), "templates", "index.html")
+    with open(html_path, encoding="utf-8") as f:
+        return f.read()
+templates/index.html をそのまま返しています。チャット画面のHTMLをWebサーバーが配信しています。
+
+全体のデータフロー
+ブラウザ
+  │ POST /api/chat {"message": "検査して", "history": [...]}
+  ▼
+FastAPI (main.py)
+  │ client.beta.messages.create(mcp_servers=[...])
+  ▼
+Claude API
+  │ GET  http://localhost:5050/mcp  → tools/list（ツール一覧取得）
+  │ POST http://localhost:5050/mcp  → tools/call RunInspection
+  ▼
+C# WPFアプリ（MCPサーバー）
+  │ WCF呼び出し
+  ▼
+C++ 検査エンジン
+  │ 検査実行・結果返却
+  ▼
+C# → Claude API → FastAPI → ブラウザ
+  {"reply": "合格です（スコア: 0.94）", "tool_calls": ["RunInspection"]}
+Webサーバー自体は薄いパススルー層で、「ブラウザとClaude APIをつなぐ中継役」に徹しています。ツールの選択・実行・結果解釈はすべてClaude APIが担っています。
+
+AIボットに、コールした関数と引数を履歴として表示する画面を追加してください
+
+6月14日
+index.html を修正して、ツール呼び出し履歴パネルを追加します。
+
+
+現在のindex.htmlを確認
+現在のindex.htmlを確認
+また、main.py も修正して引数も返すようにします。
+
+
+Main.pyを更新：引数・結果も返す
+Main.pyを更新：引数・結果も返す
+次にHTMLを全面的に書き直します。
+
+
+2個のコマンドを実行しました, ファイルを読み取りました
+2個のコマンドを実行しました, ファイルを読み取りました
+変更内容を説明します。
+
+変更したファイルと内容
+main.py — 引数と結果も返すように変更
+レスポンスの tool_calls を名前だけでなく、引数・結果を含む構造体に変更しました。
+
+python
+# 変更前
+tool_calls: list[str]          # ツール名だけ
+
+# 変更後
+class ToolCallRecord(BaseModel):
+    name:      str   # 関数名     例: "SetThreshold"
+    arguments: dict  # 引数       例: {"value": 0.9}
+    result:    str   # 実行結果   例: "閾値を 0.90 に設定しました"
+index.html — ツール履歴パネルを追加
+右ペインをタブ形式にして「ツール履歴」と「クイックアクション」を切り替えられるようにしました。
+
+ツール履歴の見た目：
+
+▼ SetThreshold                    14:32:05
+  引数
+  {
+    "value": 0.9
+  }
+  結果
+  閾値を 0.90 に設定しました
+
+▶ RunInspection                   14:32:06   ← クリックで展開
+ツールが呼ばれるたびに自動でツール履歴タブに切り替わります
+最新のカードが先頭に展開表示され、古いカードは折りたたまれます
+「ツール履歴」タブのバッジに呼び出し累計件数が表示されます
+「クリア」ボタンで会話履歴と合わせてツール履歴もリセットされます
+
+Inspection system
+ZIP 
+もしマニュアルや説明書をRAGで提供してAIに参照させたい場合はどうすればいいですか
+
+6月14日
+RAGを追加する場合の構成と実装を説明します。
+
+全体構成
+現在のシステムへの追加は最小限で済みます。Webサーバー側にRAG処理を追加するだけで、C#側は変更不要です。
+
+V
+
+visualizeに接続できません
+仕組みと実装をまとめて説明します。
+
+RAGの基本的な考え方
+RAGとは「ユーザーの質問に関連するマニュアルの箇所を検索して、その文章をそのままClaudeへの指示に差し込む」手法です。Claudeはマニュアルを直接学習しているわけではなく、毎回の会話で関連部分を読んで回答します。C#側は一切変更不要で、main.py に処理を追加するだけです。
+
+実装手順
+ステップ1：必要パッケージの追加
+text
+# requirements.txt に追記
+chromadb==0.5.*
+sentence-transformers==3.*
+pypdf2==3.*
+ステップ2：マニュアルの事前登録スクリプト（ingest.py）
+python
+# ingest.py — 初回のみ実行するスクリプト
+import chromadb
+from sentence_transformers import SentenceTransformer
+import PyPDF2, pathlib, textwrap
+
+DOCS_DIR  = "./docs"        # マニュアルPDFを置くフォルダ
+CHUNK_SIZE = 600            # 1チャンクの文字数
+
+model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+client = chromadb.PersistentClient(path="./chroma_db")
+col = client.get_or_create_collection("manuals")
+
+def split_text(text: str, size: int) -> list[str]:
+    return textwrap.wrap(text, size, break_long_words=False)
+
+for pdf_path in pathlib.Path(DOCS_DIR).glob("*.pdf"):
+    reader = PyPDF2.PdfReader(str(pdf_path))
+    full_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+
+    chunks = split_text(full_text, CHUNK_SIZE)
+    vectors = model.encode(chunks).tolist()
+
+    col.add(
+        documents=chunks,
+        embeddings=vectors,
+        ids=[f"{pdf_path.stem}_{i}" for i in range(len(chunks))],
+        metadatas=[{"source": pdf_path.name} for _ in chunks],
+    )
+    print(f"登録完了: {pdf_path.name} ({len(chunks)} チャンク)")
+ステップ3：main.py にRAG検索を追加
+python
+import chromadb
+from sentence_transformers import SentenceTransformer
+
+# 起動時に一度だけ初期化
+_embed_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+_chroma      = chromadb.PersistentClient(path="./chroma_db")
+_col         = _chroma.get_or_create_collection("manuals")
+
+def search_manual(query: str, n_results: int = 3) -> str:
+    """クエリに最も近いマニュアルの箇所を返す"""
+    vector = _embed_model.encode([query]).tolist()
+    results = _col.query(query_embeddings=vector, n_results=n_results)
+    chunks = results["documents"][0]
+    sources = [m["source"] for m in results["metadatas"][0]]
+    lines = []
+    for chunk, src in zip(chunks, sources):
+        lines.append(f"【出典: {src}】\n{chunk}")
+    return "\n\n".join(lines)
+そして /api/chat エンドポイントのsystem_promptの組み立て部分を変更します。
+
+python
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(req: ChatRequest):
+
+    # ── RAG：関連マニュアル箇所を検索 ──────────────
+    manual_context = search_manual(req.message)
+
+    # system_promptにマニュアル内容を注入
+    system_with_rag = SYSTEM_PROMPT + f"""
+
+## 参考マニュアル（関連箇所）
+以下はユーザーの質問に関連するマニュアルの抜粋です。
+回答の参考にしてください。
+
+{manual_context}
+"""
+
+    messages = req.conversation_history + [
+        {"role": "user", "content": req.message}
+    ]
+
+    response = client.beta.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1024,
+        system=system_with_rag,   # ← RAGコンテキスト付きに変更
+        messages=messages,
+        mcp_servers=[{"type": "url", "url": MCP_SERVER_URL, "name": "inspection-server"}],
+        betas=["mcp-client-2025-04-04"],
+    )
+    # 以降は変更なし
+運用フロー
+初回のみ：
+  docs/ フォルダにPDFを置く → python ingest.py を実行
+  → ChromaDBにベクトルが保存される
+
+日常運用：
+  python main.py を起動するだけ
+  → チャットのたびに自動でRAG検索が走る
+
+マニュアル更新時：
+  新しいPDFを docs/ に追加 → python ingest.py を再実行
+効果の例
+RAGなしの場合、Claudeは一般的な回答しかできません。
+
+ユーザー: エラーコード E-042 が出たときの対処法は？
+AI: エラーコードについての詳細情報を持ち合わせていないため...
+RAGありでマニュアルを登録した場合、マニュアルの該当箇所を参照して答えます。
+
+ユーザー: エラーコード E-042 が出たときの対処法は？
+AI: マニュアルによると、E-042 は照明ユニットの輝度低下を示すエラーです。
+    対処法として以下が記載されています：
+    1. 照明ユニットの清掃を実施してください
+    2. 改善しない場合は照明ユニットの交換が必要です
+    なお、照明ユニットの交換手順はマニュアル7章に記載されています。
+日本語に適したEmbeddingモデル
+今回使用している paraphrase-multilingual-MiniLM-L12-v2 は日本語対応の軽量モデルです。より精度を上げたい場合は以下も選択肢になります。
+
+モデル	特徴
+paraphrase-multilingual-MiniLM-L12-v2	軽量・高速（推奨）
+intfloat/multilingual-e5-large	高精度・やや重い
+OpenAI text-embedding-3-small	API課金だが高品質
+実装してみますか？
+
+呼び出す関数について説明しているAPI仕様書があります。これもRAGと同様にAIに参照させることはできますか。させたほうがよいですか
+
+6月14日
+はい、できます。そしてAPI仕様書についてはRAGよりも適した方法があります。
+
+API仕様書の参照方法は2択
+方法A：RAGで検索して渡す（マニュアルと同じ方法）
+質問に関連する部分だけを抽出してClaudeに渡します。
+
+ユーザー:「閾値を変更して」
+→ 仕様書から SetThreshold 関連の箇所を検索
+→ その部分だけをプロンプトに注入
+方法B：system_promptに全文を直接埋め込む（推奨）
+仕様書をそのままsystem_promptに書いておく方法です。
+
+python
+SYSTEM_PROMPT = """あなたは画像検査システムの操作アシスタントです。
+
+## 利用可能なAPIの仕様
+| 関数名 | 引数 | 説明 |
+|--------|------|------|
+| RunInspection   | なし              | 検査を実行する |
+| SetThreshold    | value: float      | 判定閾値を0.0〜1.0で設定 |
+| LoadRecipe      | recipeId: string  | 検査レシピを読み込む |
+...
+
+## 注意事項
+- 閾値は必ず0.0〜1.0の範囲で指定すること
+- レシピIDは英数字のみ使用可能
+...
+"""
+どちらがよいか
+API仕様書は方法Bの直接埋め込みが推奨です。理由を整理します。
+
+観点	RAG（方法A）	直接埋め込み（方法B）
+仕様書のサイズ	大きくても対応できる	小〜中規模なら問題なし
+検索漏れリスク	ある（関連箇所を見つけられないことも）	ゼロ（全文参照）
+整合性	断片的な情報になりやすい	関数間の依存関係も把握できる
+更新の手間	ingest.py の再実行が必要	ファイルを差し替えるだけ
+向いている文書	長大なマニュアル・手順書	API仕様・設定値一覧・エラーコード表
+API仕様書は「全体を把握した上で判断してほしい」文書です。たとえば「先にLoadRecipeしてからRunInspectionする」という手順の依存関係は、関連箇所だけを切り出すRAGでは伝わりにくく、全文を持っていれば自然に理解できます。
+
+実装方法（方法B）
+仕様書をファイルとして管理して、起動時に読み込む形にすると更新が楽です。
+
+WebServer/
+├── main.py
+├── docs/
+│   ├── api_spec.md        ← API仕様書（ここを更新するだけでOK）
+│   └── manual_*.pdf       ← 長大なマニュアル（RAG対象）
+python
+# main.py — 起動時にAPI仕様書を読み込む
+def load_api_spec() -> str:
+    spec_path = os.path.join(os.path.dirname(__file__), "docs", "api_spec.md")
+    if os.path.exists(spec_path):
+        with open(spec_path, encoding="utf-8") as f:
+            return f.read()
+    return ""
+
+API_SPEC = load_api_spec()
+
+SYSTEM_PROMPT = f"""あなたは画像検査システムの操作アシスタントです。
+
+## API仕様
+{API_SPEC}
+
+## マニュアルについて
+操作手順や背景知識は別途提供される参考マニュアルを参照してください。
+"""
+2つを組み合わせる構成（最終形）
+API仕様書   → system_promptに全文埋め込み（常に参照）
+操作マニュアル → RAGで関連箇所だけ検索して注入（質問ごと）
+この組み合わせが最もバランスが良く、「関数の使い方はAPIで正確に把握しつつ、手順や背景知識はマニュアルから補う」という構成になります。実装しますか？
+
+最終的にAPI仕様書はサイズがかなり大きくなります。その場合はどうすればいい？
+
+6月14日
+API仕様書が大きい場合も、マニュアルと同様にRAGで検索して渡す方法が現実的です。ただしAPI仕様書はマニュアルと性質が異なるため、チャンクの切り方に工夫が必要です。
+
+API仕様書RAGの核心：関数単位でチャンクを切る
+マニュアルは「文字数で均等に分割」で問題ありませんが、API仕様書を同じように分割すると関数の定義が途中で切れてしまいます。関数1つ＝チャンク1つが鉄則です。
+
+markdown
+# api_spec.md の書き方（関数ごとに区切る）
+
+## RunInspection
+- 引数: なし
+- 戻り値: InspectionResult（Pass, Score, ImagePath, Timestamp）
+- 説明: 現在のレシピと閾値で画像検査を実行する
+- 注意: 事前にLoadRecipeでレシピを読み込んでおく必要がある
+
+## SetThreshold
+- 引数: value (float, 0.0〜1.0)
+- 戻り値: なし
+- 説明: 判定閾値を変更する。値が大きいほど厳しい判定になる
+- 注意: 変更後の次回RunInspectionから反映される
+
+## LoadRecipe
+...
+実装：関数単位で分割するingest
+python
+# ingest.py（API仕様書版）
+import chromadb, re
+from sentence_transformers import SentenceTransformer
+
+model  = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+client = chromadb.PersistentClient(path="./chroma_db")
+col    = client.get_or_create_collection("api_spec")
+
+def split_by_function(md_text: str) -> list[dict]:
+    """## 関数名 の見出しで分割する"""
+    chunks = []
+    sections = re.split(r'^## ', md_text, flags=re.MULTILINE)
+    for section in sections:
+        if not section.strip():
+            continue
+        lines    = section.strip().splitlines()
+        func_name = lines[0].strip()
+        body      = "\n".join(lines).strip()
+        chunks.append({"name": func_name, "text": body})
+    return chunks
+
+with open("./docs/api_spec.md", encoding="utf-8") as f:
+    md = f.read()
+
+chunks  = split_by_function(md)
+texts   = [c["text"] for c in chunks]
+vectors = model.encode(texts).tolist()
+
+col.add(
+    documents=texts,
+    embeddings=vectors,
+    ids=[c["name"] for c in chunks],
+    metadatas=[{"function": c["name"]} for c in chunks],
+)
+print(f"API仕様登録完了: {len(chunks)} 関数")
+main.py：API仕様とマニュアルを別コレクションで検索
+python
+_col_api    = _chroma.get_or_create_collection("api_spec")
+_col_manual = _chroma.get_or_create_collection("manuals")
+
+def search_context(query: str) -> str:
+    vector = _embed_model.encode([query]).tolist()
+
+    # API仕様：関連する関数定義を最大3件
+    api_res = _col_api.query(query_embeddings=vector, n_results=3)
+    api_chunks = api_res["documents"][0]
+
+    # マニュアル：関連する手順・説明を最大2件
+    man_res = _col_manual.query(query_embeddings=vector, n_results=2)
+    man_chunks = man_res["documents"][0]
+    man_sources = [m["source"] for m in man_res["metadatas"][0]]
+
+    parts = []
+    if api_chunks:
+        parts.append("## 関連するAPI仕様\n" + "\n\n".join(api_chunks))
+    if man_chunks:
+        man_text = "\n\n".join(
+            f"【{src}】\n{chunk}"
+            for chunk, src in zip(man_chunks, man_sources)
+        )
+        parts.append("## 関連するマニュアル\n" + man_text)
+
+    return "\n\n".join(parts)
+さらに精度を上げるテクニック
+大きなAPI仕様書で検索精度が落ちやすいのは、ユーザーが関数名を知らずに自然言語で聞くケースです。「閾値を変える」と言っても SetThreshold というキーワードが一致しないため、検索でヒットしないことがあります。
+
+これを防ぐには、仕様書に自然言語の別名・説明文を加えるのが効果的です。
+
+markdown
+## SetThreshold
+- 別名・関連ワード: 閾値変更, 判定基準, 合格ライン, 厳しくする, 緩める
+- 引数: value (float, 0.0〜1.0)
+- 説明: 判定閾値を変更する
+...
+あるいは登録時にEmbeddingするテキストを「関数名＋説明文」にして、検索ヒット率を上げる方法もあります。
+
+python
+# 検索用テキストと表示用テキストを分ける
+search_text  = f"{func_name} {alias_words} {description}"  # 検索用（幅広く）
+display_text = full_spec_text                               # Claudeに渡す（詳細）
+
+col.add(
+    documents=[display_text],   # Claudeに渡す本文
+    embeddings=model.encode([search_text]).tolist(),  # 検索はこちらで
+    ids=[func_name],
+)
+全体のまとめ
+小〜中規模のAPI仕様書  → system_promptに全文埋め込み（シンプル）
+大規模のAPI仕様書      → 関数単位でチャンク分割してRAG検索
+操作マニュアル         → 文字数単位でチャンク分割してRAG検索
+
+2つを別コレクションで管理して、毎回両方を検索して注入する
+この構成にするかどうか、あるいは現在のAPI仕様書の規模感（関数の数やページ数）を教えていただければ、どちらの方法が適切かより具体的に判断できます。
+
+このシステムはMCPサーバの仕組みを使って実現していますが、それが最適ですか？他によいシステム構成や技術があれば提案してください。
+
+6月14日
+良い質問です。MCPは有力な選択肢ですが、唯一の正解ではありません。整理して比較します。
+
+現在の構成の特徴を再確認
+現在のシステムは「WebサーバーがClaude APIを呼ぶときにMCPサーバーのURLを渡し、ClaudeがMCPプロトコル経由でC#アプリを操作する」構成です。
+
+ブラウザ → Webサーバー → Claude API ←→ C#アプリ（MCPサーバー）
+Claude APIがMCPクライアントとして動作するため、ツール選択の判断をすべてClaude側に委ねています。
+
+代替構成の比較
+構成1：Function Calling（現在のMCPと最も近い代替）
+MCPの代わりに、Claude APIのFunction Calling機能でツールを定義する方法です。
+
+python
+# Webサーバー側でツールを定義する
+tools = [
+    {
+        "name": "RunInspection",
+        "description": "画像検査を実行する",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        }
+    },
+    {
+        "name": "SetThreshold",
+        "description": "判定閾値を設定する",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "value": {"type": "number", "description": "0.0〜1.0"}
+            },
+            "required": ["value"]
+        }
+    }
+]
+
+response = client.messages.create(
+    model="claude-sonnet-4-6",
+    tools=tools,          # ← MCPの代わりにここで定義
+    messages=messages,
+)
+
+# ツール呼び出しが返ってきたらWebサーバーが直接C#のAPIを叩く
+for block in response.content:
+    if block.type == "tool_use":
+        result = call_csharp_api(block.name, block.input)
+C#側はMCPサーバーではなく**普通のWeb API（REST）**を公開するだけでよくなります。
+
+観点	MCP	Function Calling
+C#側の実装	MCPサーバー（専用SDK）	普通のWeb API
+ツール定義の場所	C#側	Webサーバー側
+Claudeとの通信	Claude APIがMCPを直接叩く	Webサーバーが仲介
+標準化	MCPプロトコル準拠	Anthropic独自
+成熟度	新しい（2024年〜）	実績あり
+構成2：Webサーバーが直接C# REST APIを叩く（AIなし判定）
+AIにツール選択を委ねず、Webサーバー側でルールベースで処理する構成です。
+
+python
+# ユーザーの意図を簡易解析してAPIを呼ぶ
+@app.post("/api/chat")
+async def chat(req: ChatRequest):
+    msg = req.message
+
+    if "検査" in msg and "実行" in msg:
+        result = requests.post("http://localhost:5050/api/run-inspection")
+        reply = f"検査完了: {result.json()}"
+    elif "閾値" in msg:
+        value = extract_number(msg)
+        requests.post(f"http://localhost:5050/api/threshold/{value}")
+        reply = f"閾値を{value}に設定しました"
+    else:
+        # 判断できない場合だけClaudeに投げる
+        reply = ask_claude(msg)
+AIへの依存が減るためレスポンスが速く、コストも下がります。ただし自然言語の柔軟な解釈はできなくなります。
+
+構成3：LangChain / LlamaIndex（AIエージェントフレームワーク）
+PythonのAIエージェントフレームワークを使う構成です。ツール定義・RAG・会話管理を統合して扱えます。
+
+python
+from langchain.agents import create_tool_calling_agent
+from langchain_anthropic import ChatAnthropic
+from langchain.tools import tool
+
+@tool
+def run_inspection() -> str:
+    """画像検査を実行する"""
+    return requests.post("http://localhost:5050/api/run-inspection").text
+
+@tool
+def set_threshold(value: float) -> str:
+    """判定閾値を設定する"""
+    return requests.post(f"http://localhost:5050/api/threshold/{value}").text
+
+llm   = ChatAnthropic(model="claude-sonnet-4-6")
+agent = create_tool_calling_agent(llm, tools=[run_inspection, set_threshold], prompt=...)
+MCPとFunction Callingの中間的な位置づけで、RAGとの統合も豊富なエコシステムがあります。ただしフレームワーク自体の学習コストとバージョン変化の速さが難点です。
+
+構成4：SignalR（双方向リアルタイム通信）
+現在の構成はリクエスト・レスポンス型ですが、C#アプリ側から能動的に通知を送りたい場合はSignalRが有効です。
+
+現在：ブラウザが聞く → C#が答える（Pull型）
+
+SignalR：C#が変化を即座に通知 → ブラウザに自動反映（Push型）
+csharp
+// C#側：検査完了を自動通知
+public class InspectionHub : Hub
+{
+    public async Task NotifyResult(InspectionResult result)
+    {
+        await Clients.All.SendAsync("InspectionCompleted", result);
+    }
+}
+javascript
+// ブラウザ側：通知を受け取る
+const connection = new signalR.HubConnectionBuilder()
+    .withUrl("http://localhost:5050/inspectionHub")
+    .build();
+
+connection.on("InspectionCompleted", (result) => {
+    // C#側から自動的に結果が届く
+    displayResult(result);
+});
+どの構成が最適か
+システムの要件によって最適解が変わります。
+
+要件	推奨構成
+自然言語で柔軟に操作したい（現在）	MCP または Function Calling
+C#側をシンプルに保ちたい	Function Calling + REST API
+検査完了を即座にブラウザへ反映したい	SignalR を追加
+RAGと深く統合したい	LangChain
+コスト・速度を優先したい	ルールベース + 必要時のみClaude
+将来的に他のAIツールとも連携したい	MCP（標準プロトコルの強み）
+現在のMCPを使い続けることへの評価
+MCPは「AIツールの標準インターフェース」として業界で採用が広がっており、将来的にClaude以外のAIからも同じC#アプリを操作できるという拡張性があります。一方でまだ新しい技術であり、ドキュメントやトラブル事例が少ないという現実的な課題もあります。
+
+現在の構成で最も改善効果が高いとすれば、C#側はMCPのまま維持しつつ、Webサーバー側にSignalRを加えてC#アプリからの自動通知を受け取れるようにすることです。これにより「AIが操作した結果がブラウザにリアルタイムで表示される」という体験が実現し、オペレーターの確認作業がより自然になります。
+
+SignalRの追加実装を行いますか？
+
+AIにツールを選択させることが必須条件です。また、時にはC#アプリも制御させたいことがあります。その場合に最もよい構成はどれですか
+
+6月14日
+条件を整理すると、答えは明確です。
+
+条件の整理
+AIがツールを選択する（必須）
+C#アプリ自体も制御対象になる（UIの操作、設定変更など）
+現在すでにMCPサーバーがC#に組み込まれている
+この3つが揃うと、MCPを継続するのが最適解です。
+
+理由：C#アプリ制御との相性
+「C++エンジンの操作」と「C#アプリ自体の制御」を同じMCPサーバーにツールとして追加するだけで対応できます。追加の通信レイヤーが不要です。
+
+csharp
+// 既存：C++エンジン操作
+[McpServerTool]
+public async Task<string> RunInspection() { ... }
+
+// 追加：C#アプリ自体の制御
+[McpServerTool]
+[Description("検査結果ウィンドウを前面に表示する")]
+public async Task<string> BringWindowToFront()
+{
+    Application.Current.Dispatcher.Invoke(() =>
+        Application.Current.MainWindow.Activate());
+    return "ウィンドウを前面に表示しました";
+}
+
+[McpServerTool]
+[Description("指定した画像ファイルをC#アプリで開いて表示する")]
+public async Task<string> OpenImageFile(
+    [Description("画像ファイルのパス")] string filePath)
+{
+    Application.Current.Dispatcher.Invoke(() =>
+        ((MainWindow)Application.Current.MainWindow).DisplayImage(filePath));
+    return $"{filePath} を表示しました";
+}
+
+[McpServerTool]
+[Description("現在C#アプリに表示されている検査結果のスクリーンショットを取得する")]
+public async Task<string> CaptureResultScreen()
+{
+    var path = await ScreenshotHelper.CaptureAsync();
+    return path;
+}
+Function CallingやLangChainでは、C#アプリのUIを操作するためにWebサーバー→C# APIという追加の通信経路が必要になります。MCPならC#の中に直接書けるため、Dispatcher.Invoke でWPFのUIスレッドに直接アクセスできるのが大きな強みです。
+
+最終的な推奨構成
+現在の構成にSignalRだけ追加する形が最もバランスが良いです。
+
+
+
+追加するものは2点だけです。
+
+追加1：WPF UI操作ツールをMCPに追加（C#側）
+C#アプリのUIを制御するツールを InspectionTools.cs に追加します。
+
+csharp
+// Tools/InspectionTools.cs に追記
+
+[McpServerTool]
+[Description("検査結果ウィンドウを前面に表示する")]
+public Task<string> BringWindowToFront()
+{
+    Application.Current.Dispatcher.Invoke(() =>
+        Application.Current.MainWindow.Activate());
+    return Task.FromResult("ウィンドウを前面に表示しました");
+}
+
+[McpServerTool]
+[Description("指定した画像ファイルをアプリで開いて表示する")]
+public Task<string> OpenImageFile(
+    [Description("表示する画像ファイルのフルパス")] string filePath)
+{
+    Application.Current.Dispatcher.Invoke(() =>
+    {
+        var win = (MainWindow)Application.Current.MainWindow;
+        win.DisplayImage(filePath);
+        win.Activate();
+    });
+    return Task.FromResult($"{filePath} を表示しました");
+}
+
+[McpServerTool]
+[Description("現在の検査結果画面のスクリーンショットを保存してパスを返す")]
+public async Task<string> CaptureResultScreen()
+{
+    string path = "";
+    Application.Current.Dispatcher.Invoke(() =>
+    {
+        var win = (MainWindow)Application.Current.MainWindow;
+        path = ScreenshotHelper.Capture(win);
+    });
+    return path;
+}
+追加2：SignalRでC#→ブラウザへのリアルタイム通知
+検査完了・エラー発生などをC#アプリからブラウザへ能動的に通知します。
+
+csharp
+// App.xaml.cs に追記
+builder.Services.AddSignalR();
+_webApp.MapHub<InspectionHub>("/hub");
+csharp
+// Hubs/InspectionHub.cs（新規追加）
+using Microsoft.AspNetCore.SignalR;
+using InspectionMcpServer.Models;
+
+public class InspectionHub : Hub { }
+
+// ResultCache.cs の SetLatest から呼び出す
+public class ResultCache
+{
+    private readonly IHubContext<InspectionHub> _hub;
+
+    public ResultCache(IHubContext<InspectionHub> hub)
+    {
+        _hub = hub;
+    }
+
+    public void SetLatest(InspectionResult result)
+    {
+        lock (_lock) { _latest = result; }
+        ResultUpdated?.Invoke(result);
+
+        // ブラウザへリアルタイム通知
+        _ = _hub.Clients.All.SendAsync("InspectionCompleted", result);
+    }
+}
+ブラウザ側（index.html）は数行追加するだけです。
+
+html
+<script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr/dist/browser/signalr.min.js"></script>
+<script>
+const hub = new signalR.HubConnectionBuilder()
+    .withUrl("http://localhost:5050/hub")
+    .withAutomaticReconnect()
+    .build();
+
+// C#アプリから検査完了が通知されたら自動で画面更新
+hub.on("InspectionCompleted", (result) => {
+    showResult(result);
+    addChatMessage("ai",
+        `検査完了通知: ${result.pass ? "合格" : "不合格"} (スコア: ${result.score.toFixed(3)})`
+    );
+});
+
+hub.start();
+</script>
+この構成で実現できること
+AIに指示する操作に加えて、C#アプリ側で起きたイベントが自動でブラウザに届くようになります。
+
+ユーザー:「検査を実行して」
+  → AI が RunInspection を呼ぶ
+  → C++が検査実行
+  → C#アプリのWPFウィンドウに結果が表示される（従来通り）
+  → SignalRでブラウザにも同時に結果が届く  ← 新規追加
+
+ユーザー:「結果画面を前に出して」
+  → AI が BringWindowToFront を呼ぶ
+  → C#のWPFウィンドウが前面に出る         ← 新規追加
+
+C#アプリ側でアラームが発生
+  → SignalRでブラウザに自動通知           ← 新規追加
+  → チャット画面に「アラーム発生」と表示
+SignalRの実装も行いますか？
+
+例えば、AIが適切な関数が見つからない場合は、関連がありそうなマニュアルのページを開くかユーザに問いかけて開かせるようにしたい場合はどのように実装すればいいか
+
+6月14日
+良いユースケースです。これはAIの「道具」としてマニュアル表示ツールをMCPに追加することで実現できます。
+
+考え方
+AIが「適切なツールがない」と判断したとき、2つの行動パターンを持たせます。
+
+ユーザー:「センサーのキャリブレーションをして」
+  ↓
+AI: MCPツールを探す → RunInspection, SetThreshold... キャリブレーション関連がない
+  ↓
+パターンA: AIが自動でマニュアルの該当ページを開く
+パターンB: AIがユーザーに確認してから開く
+どちらも実装の核心は同じで、「マニュアルを開く」MCPツールをC#側に追加することです。AIは自分の判断でこのツールを呼びます。
+
+C#側：マニュアル表示ツールの追加
+csharp
+// Tools/InspectionTools.cs に追記
+
+[McpServerTool]
+[Description("""
+    操作方法が不明なとき、または適切なツールが見つからないときに呼ぶ。
+    マニュアルの該当ページをC#アプリのビューワーで開く。
+    keyword には操作内容のキーワードを日本語で渡す。
+    """)]
+public async Task<string> OpenManualPage(
+    [Description("検索キーワード（例: キャリブレーション、エラーE042、照明調整）")]
+    string keyword)
+{
+    var page = await _manualIndex.FindPageAsync(keyword);
+
+    Application.Current.Dispatcher.Invoke(() =>
+    {
+        var win = (MainWindow)Application.Current.MainWindow;
+        win.OpenManualViewer(page.FilePath, page.PageNumber);
+        win.Activate();
+    });
+
+    return page.Found
+        ? $"マニュアル「{page.Title}」({page.PageNumber}ページ)を開きました"
+        : $"キーワード「{keyword}」に一致するページが見つかりませんでした";
+}
+
+[McpServerTool]
+[Description("マニュアルの目次一覧を返す。どのページを開くかユーザーに選ばせたいときに使う")]
+public async Task<string> GetManualTableOfContents()
+{
+    var toc = await _manualIndex.GetTableOfContentsAsync();
+    return System.Text.Json.JsonSerializer.Serialize(toc, new System.Text.Json.JsonSerializerOptions
+    {
+        WriteIndented = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    });
+}
+マニュアルインデックス（C#）
+csharp
+// Services/ManualIndexService.cs（新規追加）
+public class ManualIndexService
+{
+    // マニュアルページのインデックス
+    // 実際はDBやJSONファイルから読み込む
+    private readonly List<ManualPage> _index = [
+        new("キャリブレーション", "manual.pdf", 12,  "センサーキャリブレーション手順"),
+        new("照明",               "manual.pdf", 24,  "照明ユニットの調整"),
+        new("エラー E-042",       "manual.pdf", 87,  "エラーコード一覧と対処法"),
+        new("レシピ作成",         "manual.pdf", 34,  "検査レシピの作成手順"),
+    ];
+
+    public Task<ManualPage> FindPageAsync(string keyword)
+    {
+        // キーワードで部分一致検索
+        var page = _index.FirstOrDefault(p =>
+            p.Keywords.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
+            p.Title.Contains(keyword,    StringComparison.OrdinalIgnoreCase))
+            ?? new ManualPage(keyword, "", 0, "") { Found = false };
+
+        return Task.FromResult(page);
+    }
+
+    public Task<List<ManualPage>> GetTableOfContentsAsync()
+        => Task.FromResult(_index);
+}
+
+public class ManualPage
+{
+    public string Keywords   { get; set; }
+    public string FilePath   { get; set; }
+    public int    PageNumber { get; set; }
+    public string Title      { get; set; }
+    public bool   Found      { get; set; } = true;
+
+    public ManualPage(string keywords, string filePath, int page, string title)
+    {
+        Keywords = keywords; FilePath = filePath;
+        PageNumber = page;   Title = title;
+    }
+}
+system_promptへの指示追加（Webサーバー側）
+AIがいつ OpenManualPage を呼ぶかは、system_promptの指示で制御します。パターンAとBで書き方が変わります。
+
+パターンA：AIが自動で開く
+python
+SYSTEM_PROMPT = """あなたは画像検査システムの操作アシスタントです。
+
+## ツールが見つからない場合のルール
+ユーザーの要求に対応するツールが見つからない場合は、以下の順番で対応してください。
+
+1. まず GetManualTableOfContents で目次を確認する
+2. 関連するページが特定できたら OpenManualPage でそのページを開く
+3. ユーザーに「マニュアルの〇〇ページを開きました」と報告する
+4. マニュアルでも対応できない場合のみ「対応するツールがありません」と伝える
+"""
+パターンB：ユーザーに確認してから開く（推奨）
+python
+SYSTEM_PROMPT = """あなたは画像検査システムの操作アシスタントです。
+
+## ツールが見つからない場合のルール
+ユーザーの要求に対応するツールが見つからない場合は、以下の手順を取ってください。
+
+1. GetManualTableOfContents で目次を確認する
+2. 関連するページを特定したら、ユーザーに提案する
+   例:「キャリブレーションについてはマニュアル12ページに手順があります。
+       開きますか？」
+3. ユーザーが「はい」「開いて」などと承諾したら OpenManualPage を呼ぶ
+4. ユーザーが「いいえ」と言ったら、他にできることを提案する
+"""
+会話の流れ
+パターンBでの実際の会話イメージです。
+
+ユーザー: センサーのキャリブレーションをして
+
+AI: → GetManualTableOfContents を呼んで目次を確認
+    → 「キャリブレーション」が12ページにあると特定
+
+    「キャリブレーションを実行するツールは現在用意されていません。
+     マニュアルの12ページにキャリブレーション手順が記載されています。
+     ページを開きますか？」
+
+ユーザー: 開いて
+
+AI: → OpenManualPage("キャリブレーション") を呼ぶ
+
+    「マニュアル『センサーキャリブレーション手順』(12ページ)を
+     C#アプリのビューワーで開きました。手順に従って作業してください。
+     作業が完了したらお知らせください。」
+実装のポイントまとめ
+要素	場所	内容
+OpenManualPage ツール	C# MCPサーバー	キーワードでページ検索してビューワーで開く
+GetManualTableOfContents ツール	C# MCPサーバー	目次一覧を返す（AIが判断材料に使う）
+ManualIndexService	C#	キーワード→ページ番号のマッピング
+system_promptの指示	Webサーバー	AIがいつ・どう使うかのルール
+AIがどのタイミングでマニュアルを開くかは、system_promptの指示文だけで変えられます。C#側は変更不要です。
+
+この実装を追加したZIPを作成しますか？
+
+はい、作成してください
+
+6月14日
+実装を進めます。
+
+
+2個のコマンドを実行しました
+2個のコマンドを実行しました
+ManualIndexService.cs（新規）
+
+
+ManualIndexService.cs作成
+ManualIndexService.cs作成
+InspectionModels.cs にManualPage用DataContractを追記
+
+
+InspectionModels.csにManual用モデル追記
+InspectionModels.csにManual用モデル追記
+InspectionTools.cs をマニュアルツール追加版に全書き換え
+
+
+InspectionTools.csをマニュアルツール追加版に更新
+InspectionTools.csをマニュアルツール追加版に更新
+App.xaml.cs に ManualIndexService を登録
+
+
+App.xaml.csにManualIndexService登録を追加
+App.xaml.csにManualIndexService登録を追加
+MainWindow にマニュアルビューワーを追加
+
+
+2個のコマンドを実行しました
+2個のコマンドを実行しました
+InspectionViewModel に ManualTitle プロパティを追加
+
+
+InspectionViewModel.csにManualTitleプロパティを追加
+InspectionViewModel.csにManualTitleプロパティを追加
+Webサーバー側のsystem_promptを更新
+
+
+Main.pyのsystem_promptをマニュアル参照ルール追加版に更新
+Main.pyのsystem_promptをマニュアル参照ルール追加版に更新
+マニュアルインデックスのサンプルJSONを作成
+
+
+マニュアルインデックスのサンプルJSONを作成
+マニュアルインデックスのサンプルJSONを作成
+ZIPを作成します。
+
+
+コマンドを実行しました, ファイルを読み取りました
+コマンドを実行しました, ファイルを読み取りました
+今回追加・変更したファイルをまとめます。
+
+変更内容
+新規追加（C#）
+
+ファイル	内容
+Services/ManualIndexService.cs	キーワード→ページ番号の検索ロジック
+Manuals/manual_index.json	マニュアルのインデックス定義（ここを編集して更新）
+変更（C#）
+
+ファイル	変更内容
+Tools/InspectionTools.cs	OpenManualPage と GetManualTableOfContents ツールを追加
+App.xaml.cs	ManualIndexService をDIに登録、Manualsフォルダを自動作成
+MainWindow.xaml	右ペインにマニュアルビューワー（WebBrowser）を追加
+MainWindow.xaml.cs	OpenManualViewer() メソッドを追加
+InspectionViewModel.cs	ManualTitle プロパティを追加
+変更（Python）
+
+ファイル	変更内容
+WebServer/main.py	system_promptにマニュアル参照ルールを追加
+マニュアルのセットアップ手順
+ビルド後、実行ファイルと同じ場所に Manuals フォルダが自動作成されます。
+
+InspectionMcpServer.exe と同じフォルダ/
+└── Manuals/
+    ├── manual_index.json   ← キーワードとページ番号の対応を編集
+    └── manual.pdf          ← 実際のマニュアルPDFを配置
+manual_index.json の FilePath にPDFのファイル名を、Keywords に検索用キーワードをスペース区切りで書くだけで、新しいページを追加できます。C#アプリを再起動すると反映されます。
+
+
+Inspection system
+ZIP 
+pythonに、##ツールが見つからない場合のルールなどを書いていくのは適切でないと思います。こういうルールが増えていく可能性があるためです。どうするのが適切ですか
+
+6月14日
+ごもっともです。system_promptが肥大化すると管理が難しくなります。解決策はシンプルです。
+
+問題の本質
+system_promptに直接書くと、こうなっていきます。
+
+python
+SYSTEM_PROMPT = """
+## 通常の操作ツール
+...
+
+## マニュアル参照ツール
+...
+
+## ツールが見つからない場合のルール
+...
+
+## 回答スタイル
+...
+
+## エラー時の対応
+...       ← 増えていく
+
+## 夜間運用時のルール
+...       ← 増えていく
+
+## 新人オペレーター向けの説明レベル
+...       ← 増えていく
+"""
+コードの中にルールが埋まっているため、ルールを変えるたびにPythonファイルを編集してデプロイが必要になります。
+
+解決策：promptをファイルで管理する
+ルールをテキストファイルとして外出しし、起動時に読み込むだけです。
+
+WebServer/
+├── main.py
+└── prompts/
+    ├── system_prompt.md        ← メインの指示
+    ├── rules_manual.md         ← マニュアル参照ルール
+    ├── rules_error.md          ← エラー時のルール
+    └── rules_style.md          ← 回答スタイル
+python
+# main.py
+def load_prompt(*filenames: str) -> str:
+    """prompts/フォルダのファイルを結合して読み込む"""
+    base = os.path.join(os.path.dirname(__file__), "prompts")
+    parts = []
+    for name in filenames:
+        path = os.path.join(base, name)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as f:
+                parts.append(f.read())
+    return "\n\n".join(parts)
+
+SYSTEM_PROMPT = load_prompt(
+    "system_prompt.md",
+    "rules_manual.md",
+    "rules_error.md",
+    "rules_style.md",
+)
+ルールを追加したいときはファイルを1つ追加して load_prompt() の引数に加えるだけ。Pythonコードは触りません。
+
+さらに一歩：環境によってルールを切り替える
+python
+# 昼間と夜間でルールを変える、など
+MODE = os.getenv("OPERATION_MODE", "normal")  # .envで設定
+
+SYSTEM_PROMPT = load_prompt(
+    "system_prompt.md",
+    "rules_manual.md",
+    f"rules_{MODE}.md",          # rules_normal.md / rules_night.md
+)
+prompts/
+├── system_prompt.md
+├── rules_manual.md
+├── rules_normal.md    ← 通常運用
+└── rules_night.md     ← 夜間・無人運用
+さらにその先：DBやCMSで管理する
+ルールの変更履歴や承認フローが必要になってきたら、プロンプトをDBに格納して管理画面から編集できる構成にします。ただし現時点ではファイル管理で十分で、シンプルさを優先するべきです。
+
+実装しますか？
+prompts/ フォルダ構成への移行は変更量が少ないので、ZIPに反映できます。
+
+プロンプトのたびにルールを読み込んでAIに伝えるのはコストがかかります。なにかいい方法ありますか
+
+6月14日
+良い視点です。整理すると3つのアプローチがあります。
+
+問題の構造
+system_promptが大きいほど、毎回のAPI呼び出しでinput_tokensが増えます。
+
+毎回のコスト = 会話履歴 + system_prompt(ルール全部) + ユーザーメッセージ
+                              ↑ここが無駄に大きい
+アプローチ1：ルールを階層化して必要なときだけ渡す
+常に必要なルールと、特定状況でだけ必要なルールを分けます。
+
+python
+# 常に渡す（小さく保つ）
+BASE_PROMPT = load_prompt("system_prompt.md")  # 役割・基本ツール一覧のみ
+
+# 状況に応じて追加
+RULE_CHUNKS = {
+    "manual":  load_prompt("rules_manual.md"),
+    "error":   load_prompt("rules_error.md"),
+    "night":   load_prompt("rules_night.md"),
+}
+
+def build_prompt(message: str) -> str:
+    rules = [BASE_PROMPT]
+
+    # メッセージ内容でルールを動的に追加
+    if any(w in message for w in ["マニュアル", "方法", "わからない", "できない"]):
+        rules.append(RULE_CHUNKS["manual"])
+    if any(w in message for w in ["エラー", "異常", "アラーム"]):
+        rules.append(RULE_CHUNKS["error"])
+
+    return "\n\n".join(rules)
+シンプルで即効性がありますが、キーワードマッチの精度に限界があります。
+
+アプローチ2：Prompt Caching（最もコスト効果が高い）
+Anthropicが提供するプロンプトキャッシュ機能を使います。同じsystem_promptは初回だけ処理してキャッシュし、2回目以降はキャッシュ済みトークンとして大幅割引で処理されます。
+
+python
+response = client.beta.messages.create(
+    model="claude-sonnet-4-6",
+    max_tokens=1024,
+    system=[
+        {
+            "type": "text",
+            "text": SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"}  # ← これだけ追加
+        }
+    ],
+    messages=messages,
+    mcp_servers=[...],
+    betas=["mcp-client-2025-04-04", "prompt-caching-2024-07-31"],
+)
+キャッシュされるとinput_tokensのコストが約90%削減されます。system_promptが大きいほど効果が高く、今回のケースに最も適しています。キャッシュの有効期間は5分で、5分以内に次のリクエストがあれば自動延長されます。
+
+コスト比較のイメージです。
+
+キャッシュなし: system_prompt(2000トークン) × リクエスト数 = 全額
+キャッシュあり: 初回だけ全額、2回目以降は約10%のコスト
+アプローチ3：ルールをMCPツールとして持たせる（根本的な解決）
+ルール自体をAIが「必要なときに取得するツール」として定義します。system_promptにはルールの存在だけを伝え、詳細は必要時にのみ取得します。
+
+python
+# system_promptは最小限
+SYSTEM_PROMPT = """
+あなたは画像検査システムのアシスタントです。
+対応方法が不明な場合は GetOperationRule ツールでルールを確認してください。
+"""
+csharp
+// C#側にルール取得ツールを追加
+[McpServerTool]
+[Description("対応方法が不明なときや、特定状況でのルールを確認するときに呼ぶ")]
+public Task<string> GetOperationRule(
+    [Description("確認したいルールの種類: manual / error / style / night")]
+    string ruleType)
+{
+    var path = Path.Combine(_rulesDir, $"rules_{ruleType}.md");
+    if (!File.Exists(path))
+        return Task.FromResult($"ルール '{ruleType}' が見つかりません");
+
+    return Task.FromResult(File.ReadAllText(path));
+}
+この方法ではルールはAIが判断して必要なときだけ取得するため、不要なルールのトークンコストはゼロになります。
+
+どれを選ぶか
+アプローチ	効果	実装コスト	向いている場面
+ルール階層化	中	低	ルール数が少ない
+Prompt Caching	高	低（1行追加）	同じルールを繰り返し使う
+ルールをツール化	最高	中	ルール数が多く増え続ける
+現状ではPrompt Cachingが最もコスパが良いです。コード1行の追加でsystem_promptのコストが約90%削減され、ルール管理のファイル外出しとも完全に併用できます。
+
+ルール数がさらに増えてきた段階で、アプローチ3のツール化を組み合わせるのが現実的な進め方です。実装しますか？
+
+ここまでのやり取りをMarkdownで出力してください
+
+21:44
+ここまでの会話の流れをMarkdownにまとめます。
+
+
+2個のコマンドを実行しました, ファイルを読み取りました
+2個のコマンドを実行しました, ファイルを読み取りました
+以下の11セクションにまとめました。
+
+セクション	内容
+1. システム要件の整理	既存構成・追加要件
+2. アーキテクチャ選定	MCP採用の理由・他構成との比較
+3. 技術スタック	C#・Python側の使用技術
+4. ファイル構成	全ファイルのディレクトリ構造
+5. MCPツール一覧	全11ツールの一覧
+6. ツールが見つからない場合の動作設計	マニュアル参照フロー
+7. RAGの設計	文書種別・チャンク戦略・精度向上
+8. system_prompt管理の設計	ファイル外出しの方法
+9. トークンコスト削減策	Prompt Cachingの実装
+10. 起動手順	ビルド〜動作確認まで
+11. カスタマイズポイント	設定変更箇所の一覧
+
+Conversation summary
+ドキュメント · MD 
+図もsvgフォーマットで、markdownに挿入していただけますか
+
+21:46
+SVGを生成してMarkdownに埋め込みます。
+
+
+4個のコマンドを実行しました
+4個のコマンドを実行しました
+4つのSVGが正しく埋め込まれています。
+
+
+Presented file
+Presented file
+4つのSVG図をMarkdownに埋め込みました。
+
+挿入位置	図の内容
+セクション2の直後	図1：システム全体アーキテクチャ
+セクション5の直後	図2：チャット〜ツール実行シーケンス
+セクション7の直後	図3：RAG構成（API仕様書とマニュアルの管理方式）
+セクション9の直後	図4：Prompt Cachingによるコスト削減
+SVGはBase64エンコードで <img> タグとして埋め込んでいるため、外部ファイルなしで単独のMarkdownファイルとして画像付きで表示されます。VS CodeのMarkdownプレビュー（Ctrl+Shift+V）や、MarkdownをHTMLに変換するツールで図が表示されます。
+
+
+Conversation summary
+ドキュメント · MD 
+出力したMarkdownをHTMLに変換してください
+
+22:13
+
+2個のコマンドを実行しました, ファイルを読み取りました
+2個のコマンドを実行しました, ファイルを読み取りました
+HTMLに変換しました。SVGの図もそのまま埋め込まれているため、単独ファイルとしてブラウザで開けます。ダウンロードして conversation_summary.html をダブルクリックするだけで表示されます。
+
+
+Conversation summary
+コード · HTML 
+
+
+
+
+
+
+Claude は AI のため、誤りを含む可能性があります。回答内容は必ずご確認ください。
+
+
+normal
+Conversation summary · HTML
+
+Failed to set up MCP app for "visualize". Check that claudemcpcontent.com is not blocked by your network or browser.
+Google Driveにエクスポートするには認証してください
+Google Driveにエクスポートするには認証してください

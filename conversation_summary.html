@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>画像検査AIボットシステム 設計・実装記録</title>
+<style>
+  /* ── リセット・ベース ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Yu Gothic UI", "Hiragino Sans", "Meiryo", sans-serif;
+    font-size: 15px;
+    line-height: 1.8;
+    color: #1a1a1a;
+    background: #f5f6f8;
+  }
+
+  /* ── レイアウト ── */
+  .page-wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 0 24px 80px;
+  }
+
+  /* ── ヘッダー ── */
+  .site-header {
+    background: linear-gradient(135deg, #3C3489 0%, #534AB7 100%);
+    color: #fff;
+    padding: 40px 24px 36px;
+    margin-bottom: 40px;
+  }
+  .site-header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: .02em;
+    color: #fff;
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+  .site-header p {
+    margin-top: 8px;
+    font-size: 13px;
+    opacity: .75;
+  }
+
+  /* ── 目次 ── */
+  .toc-box {
+    background: #fff;
+    border: 1px solid #e0e0e0;
+    border-radius: 10px;
+    padding: 20px 24px;
+    margin-bottom: 36px;
+  }
+  .toc-box .toc-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-bottom: 10px;
+  }
+  .toc-box ul { list-style: none; padding: 0; }
+  .toc-box li { margin: 4px 0; }
+  .toc-box a {
+    color: #534AB7;
+    text-decoration: none;
+    font-size: 14px;
+  }
+  .toc-box a:hover { text-decoration: underline; }
+
+  /* ── セクション見出し ── */
+  h1 { font-size: 26px; font-weight: 700; margin: 48px 0 16px;
+        padding-bottom: 10px; border-bottom: 2px solid #534AB7; color: #1a1a1a; }
+  h2 { font-size: 20px; font-weight: 700; margin: 40px 0 14px;
+        padding-left: 12px; border-left: 4px solid #534AB7; color: #1a1a1a; }
+  h3 { font-size: 16px; font-weight: 700; margin: 28px 0 10px; color: #3C3489; }
+
+  /* ── 本文 ── */
+  p { margin: 12px 0; }
+  ul, ol { padding-left: 24px; margin: 10px 0; }
+  li { margin: 4px 0; }
+
+  /* ── コードブロック ── */
+  pre {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border-radius: 8px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    margin: 16px 0;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  code {
+    font-family: "Consolas", "Cascadia Code", "Fira Code", monospace;
+  }
+  p code, li code {
+    background: #f0eeff;
+    color: #3C3489;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 13px;
+  }
+
+  /* ── テーブル ── */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    background: #fff;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  }
+  th {
+    background: #534AB7;
+    color: #fff;
+    padding: 10px 14px;
+    font-size: 13px;
+    font-weight: 600;
+    text-align: left;
+  }
+  td {
+    padding: 9px 14px;
+    font-size: 14px;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:nth-child(even) td { background: #fafafa; }
+
+  /* ── カード（セクション背景） ── */
+  .card {
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+    padding: 24px 28px;
+    margin-bottom: 28px;
+  }
+
+  /* ── SVG図 ── */
+  img {
+    display: block;
+    max-width: 100%;
+    margin: 20px auto;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+  }
+  em { font-style: normal; font-size: 12px; color: #888;
+        display: block; text-align: center; margin-top: -12px; margin-bottom: 16px; }
+
+  /* ── 水平線 ── */
+  hr { border: none; border-top: 1px solid #e8e8e8; margin: 32px 0; }
+
+  /* ── 引用 ── */
+  blockquote {
+    border-left: 4px solid #534AB7;
+    background: #f3f1ff;
+    padding: 10px 16px;
+    margin: 14px 0;
+    border-radius: 0 6px 6px 0;
+    color: #3C3489;
+  }
+</style>
+</head>
+<body>
+
+<div class="site-header">
+  <div class="page-wrap">
+    <h1>画像検査AIボットシステム</h1>
+    <p>設計・実装記録 — C# WPF + C++ + Claude API + MCP</p>
+  </div>
+</div>
+
+<div class="page-wrap">
+<h1 id="ai">画像検査AIボットシステム 設計・実装記録</h1>
+<h2 id="_1">概要</h2>
+<p>C#（WPF）製の画像検査編集ソフトと、C++製の画像検査システム本体（WCF通信）を、
+WebアプリのAIボットで制御するシステムの設計・実装記録。</p>
+<hr />
+<h2 id="1">1. システム要件の整理</h2>
+<h3 id="_2">既存構成</h3>
+<ul>
+<li><strong>C#アプリ（WPF）</strong>：画像検査編集ソフト（確認UI）</li>
+<li><strong>C++アプリ</strong>：画像検査システム本体</li>
+<li><strong>IPC</strong>：WCF（Windows Communication Foundation）</li>
+</ul>
+<h3 id="_3">追加要件</h3>
+<ul>
+<li>WebアプリのAIボットから画像検査システムを制御する</li>
+<li>AIボットで指示・編集した結果はC#アプリで確認できること</li>
+<li>AIがツールを選択すること（必須）</li>
+<li>将来的にC#アプリ自体もAIで制御したい</li>
+</ul>
+<hr />
+<h2 id="2">2. アーキテクチャ選定</h2>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA3MjAgNDAwIiB3aWR0aD0iNzIwIiBoZWlnaHQ9IjQwMCIgZm9udC1mYW1pbHk9IidZdSBHb3RoaWMgVUknLCAnSGlyYWdpbm8gU2FucycsIHNhbnMtc2VyaWYiPgogIDxkZWZzPgogICAgPG1hcmtlciBpZD0iYXJyIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjgiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI2IiBtYXJrZXJIZWlnaHQ9IjYiIG9yaWVudD0iYXV0by1zdGFydC1yZXZlcnNlIj4KICAgICAgPHBhdGggZD0iTTIgMUw4IDVMMiA5IiBmaWxsPSJub25lIiBzdHJva2U9IiM1NTUiIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KICAgIDwvbWFya2VyPgogICAgPG1hcmtlciBpZD0iYXJyLWciIHZpZXdCb3g9IjAgMCAxMCAxMCIgcmVmWD0iOCIgcmVmWT0iNSIgbWFya2VyV2lkdGg9IjYiIG1hcmtlckhlaWdodD0iNiIgb3JpZW50PSJhdXRvLXN0YXJ0LXJldmVyc2UiPgogICAgICA8cGF0aCBkPSJNMiAxTDggNUwyIDkiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzFEOUU3NSIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgogICAgPC9tYXJrZXI+CiAgPC9kZWZzPgogIDwhLS0g6IOM5pmvIC0tPgogIDxyZWN0IHdpZHRoPSI3MjAiIGhlaWdodD0iNDAwIiBmaWxsPSIjZjhmOWZhIiByeD0iMTIiLz4KICA8dGV4dCB4PSIzNjAiIHk9IjMyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE1IiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzFhMWExYSI+44K344K544OG44Og5YWo5L2T44Ki44O844Kt44OG44Kv44OB44OjPC90ZXh0PgoKICA8IS0tIOODluODqeOCpuOCtiAtLT4KICA8cmVjdCB4PSIyMCIgeT0iMTYwIiB3aWR0aD0iMTEwIiBoZWlnaHQ9IjU2IiByeD0iOCIgZmlsbD0iI2VkZTlmZiIgc3Ryb2tlPSIjN2M2ZmNkIiBzdHJva2Utd2lkdGg9IjEuMiIvPgogIDx0ZXh0IHg9Ijc1IiB5PSIxODQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTMiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjM0MzNDg5Ij7jg5bjg6njgqbjgrY8L3RleHQ+CiAgPHRleHQgeD0iNzUiIHk9IjIwMiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzU1NSI+44OB44Oj44OD44OIVUk8L3RleHQ+CgogIDwhLS0g55+i5Y2w77ya44OW44Op44Km44K24oaSV2Vi44K144O844OQ44O8IC0tPgogIDxsaW5lIHgxPSIxMzAiIHkxPSIxODgiIHgyPSIxNjgiIHkyPSIxODgiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjQiIG1hcmtlci1lbmQ9InVybCgjYXJyKSIvPgogIDx0ZXh0IHg9IjE0OSIgeT0iMTgwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjNzc3Ij5IVFRQPC90ZXh0PgoKICA8IS0tIFdlYuOCteODvOODkOODvOaeoCAtLT4KICA8cmVjdCB4PSIxNjgiIHk9IjEzMCIgd2lkdGg9IjE2MCIgaGVpZ2h0PSIxMTYiIHJ4PSIxMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1kYXNoYXJyYXk9IjUgMyIvPgogIDx0ZXh0IHg9IjE3OCIgeT0iMTUwIiBmb250LXNpemU9IjEwIiBmaWxsPSIjOTk5Ij5XZWLjgrXjg7zjg5Djg7wgKFB5dGhvbik8L3RleHQ+CiAgPHJlY3QgeD0iMTgwIiB5PSIxNTgiIHdpZHRoPSIxMzYiIGhlaWdodD0iNDIiIHJ4PSI3IiBmaWxsPSIjZWRlOWZmIiBzdHJva2U9IiM3YzZmY2QiIHN0cm9rZS13aWR0aD0iMS4yIi8+CiAgPHRleHQgeD0iMjQ4IiB5PSIxNzUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjM0MzNDg5Ij5DbGF1ZGUgQVBJIOWRvOOBs+WHuuOBlzwvdGV4dD4KICA8dGV4dCB4PSIyNDgiIHk9IjE5MSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzU1NSI+5Lya6Kmx566h55CGIC8gUkFH5rOo5YWlPC90ZXh0PgogIDxyZWN0IHg9IjE4MCIgeT0iMjEwIiB3aWR0aD0iMTM2IiBoZWlnaHQ9IjI4IiByeD0iNyIgZmlsbD0iI2U4ZjVlOSIgc3Ryb2tlPSIjMmQ5ZTVhIiBzdHJva2Utd2lkdGg9IjEuMiIvPgogIDx0ZXh0IHg9IjI0OCIgeT0iMjI4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjMWE1YzM0Ij5SQUfmpJzntKIgKENocm9tYURCKTwvdGV4dD4KCiAgPCEtLSDnn6LljbDvvJpXZWLjgrXjg7zjg5Djg7zihpJDbGF1ZGUgLS0+CiAgPGxpbmUgeDE9IjMyOCIgeTE9IjE4OCIgeDI9IjM2NiIgeTI9IjE4OCIgc3Ryb2tlPSIjNTU1IiBzdHJva2Utd2lkdGg9IjEuNCIgbWFya2VyLWVuZD0idXJsKCNhcnIpIi8+CiAgPHRleHQgeD0iMzQ3IiB5PSIxODAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM3NzciPk1DUDwvdGV4dD4KCiAgPCEtLSBDbGF1ZGUgQVBJIC0tPgogIDxyZWN0IHg9IjM2NiIgeT0iMTYwIiB3aWR0aD0iMTIwIiBoZWlnaHQ9IjU2IiByeD0iOCIgZmlsbD0iI2VkZTlmZiIgc3Ryb2tlPSIjN2M2ZmNkIiBzdHJva2Utd2lkdGg9IjEuMiIvPgogIDx0ZXh0IHg9IjQyNiIgeT0iMTg0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEzIiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzNDMzQ4OSI+Q2xhdWRlIEFQSTwvdGV4dD4KICA8dGV4dCB4PSI0MjYiIHk9IjIwMiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzU1NSI+44OE44O844Or6YG45oqe44O75a6f6KGMPC90ZXh0PgoKICA8IS0tIOefouWNsO+8mkNsYXVkZeKGkkMjIC0tPgogIDxsaW5lIHgxPSI0ODYiIHkxPSIxODgiIHgyPSI1MjQiIHkyPSIxODgiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjQiIG1hcmtlci1lbmQ9InVybCgjYXJyKSIvPgogIDx0ZXh0IHg9IjUwNSIgeT0iMTgwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjNzc3Ij5NQ1A8L3RleHQ+CgogIDwhLS0gQyPjgqLjg5fjg6rmnqAgLS0+CiAgPHJlY3QgeD0iNTI0IiB5PSI2MCIgd2lkdGg9IjE3MCIgaGVpZ2h0PSIyODAiIHJ4PSIxMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1kYXNoYXJyYXk9IjUgMyIvPgogIDx0ZXh0IHg9IjUzNCIgeT0iODAiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM5OTkiPkMjIFdQRuOCouODl+ODqjwvdGV4dD4KCiAgPCEtLSBNQ1DjgrXjg7zjg5Djg7wgLS0+CiAgPHJlY3QgeD0iNTM2IiB5PSI5MCIgd2lkdGg9IjE0NiIgaGVpZ2h0PSI0NCIgcng9IjciIGZpbGw9IiNmZGU4ZTgiIHN0cm9rZT0iI2Q5NGY0ZiIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4KICA8dGV4dCB4PSI2MDkiIHk9IjEwOCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9ImJvbGQiIGZpbGw9IiM4YjFhMWEiPk1DUOOCteODvOODkOODvDwvdGV4dD4KICA8dGV4dCB4PSI2MDkiIHk9IjEyNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzU1NSI+cG9ydCA1MDUwPC90ZXh0PgoKICA8IS0tIOaknOafu+ODhOODvOODq+e+pCAtLT4KICA8cmVjdCB4PSI1MzYiIHk9IjE0OCIgd2lkdGg9IjE0NiIgaGVpZ2h0PSI0NCIgcng9IjciIGZpbGw9IiNmZGU4ZTgiIHN0cm9rZT0iI2Q5NGY0ZiIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4KICA8dGV4dCB4PSI2MDkiIHk9IjE2NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9ImJvbGQiIGZpbGw9IiM4YjFhMWEiPuaknOafu+aTjeS9nOODhOODvOODqzwvdGV4dD4KICA8dGV4dCB4PSI2MDkiIHk9IjE4MiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzU1NSI+UnVuSW5zcGVjdGlvbiDnrYk8L3RleHQ+CgogIDwhLS0gV1BGIFVJ44OE44O844OrIC0tPgogIDxyZWN0IHg9IjUzNiIgeT0iMjA2IiB3aWR0aD0iMTQ2IiBoZWlnaHQ9IjQ0IiByeD0iNyIgZmlsbD0iI2ZkZThlOCIgc3Ryb2tlPSIjZDk0ZjRmIiBzdHJva2Utd2lkdGg9IjEuMiIvPgogIDx0ZXh0IHg9IjYwOSIgeT0iMjI0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzhiMWExYSI+V1BGIFVJ44OE44O844OrPC90ZXh0PgogIDx0ZXh0IHg9IjYwOSIgeT0iMjQwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjNTU1Ij5CcmluZ1dpbmRvd1RvRnJvbnQg562JPC90ZXh0PgoKICA8IS0tIOODnuODi+ODpeOCouODq+ODhOODvOODqyAtLT4KICA8cmVjdCB4PSI1MzYiIHk9IjI2NCIgd2lkdGg9IjE0NiIgaGVpZ2h0PSI0NCIgcng9IjciIGZpbGw9IiNmZGU4ZTgiIHN0cm9rZT0iI2Q5NGY0ZiIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4KICA8dGV4dCB4PSI2MDkiIHk9IjI4MiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9ImJvbGQiIGZpbGw9IiM4YjFhMWEiPuODnuODi+ODpeOCouODq+ODhOODvOODqzwvdGV4dD4KICA8dGV4dCB4PSI2MDkiIHk9IjI5OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzU1NSI+T3Blbk1hbnVhbFBhZ2Ug562JPC90ZXh0PgoKICA8IS0tIOefouWNsO+8mkMj4oaSQysrIC0tPgogIDxsaW5lIHgxPSI2MDkiIHkxPSIzMDgiIHgyPSI2MDkiIHkyPSIzNDQiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjQiIG1hcmtlci1lbmQ9InVybCgjYXJyKSIvPgogIDx0ZXh0IHg9IjYyMiIgeT0iMzMwIiBmb250LXNpemU9IjEwIiBmaWxsPSIjNzc3Ij5XQ0Y8L3RleHQ+CgogIDwhLS0gQysr44Ko44Oz44K444OzIC0tPgogIDxyZWN0IHg9IjUyNCIgeT0iMzQ0IiB3aWR0aD0iMTcwIiBoZWlnaHQ9IjQ0IiByeD0iNyIgZmlsbD0iI2ZmZjNjZCIgc3Ryb2tlPSIjZTZhODE3IiBzdHJva2Utd2lkdGg9IjEuMiIvPgogIDx0ZXh0IHg9IjYwOSIgeT0iMzYyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEzIiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzdhNGYwMCI+QysrIOeUu+WDj+aknOafu+OCqOODs+OCuOODszwvdGV4dD4KICA8dGV4dCB4PSI2MDkiIHk9IjM3OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzU1NSI+V0NG44K144O844OT44K544Ob44K544OIPC90ZXh0PgoKICA8IS0tIOWHoeS+iyAtLT4KICA8bGluZSB4MT0iMjAiIHkxPSIzNzgiIHgyPSI1MCIgeTI9IjM3OCIgc3Ryb2tlPSIjNTU1IiBzdHJva2Utd2lkdGg9IjEuNCIgbWFya2VyLWVuZD0idXJsKCNhcnIpIi8+CiAgPHRleHQgeD0iNTYiIHk9IjM4MiIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzU1NSI+5Yi25b6h44OV44Ot44O8PC90ZXh0Pgo8L3N2Zz4=" width="720"/>
+<em>図1：システム全体アーキテクチャ</em></p>
+<h3 id="cmcp">採用構成：C#アプリ内にMCPサーバーを組み込む</h3>
+<div class="codehilite"><pre><span></span><code>ブラウザ（チャットUI）
+  ↓ HTTP
+Webサーバー（Python / FastAPI）
+  ↓ Claude API + mcp_servers パラメータ
+Claude API
+  ↓ MCPプロトコル（HTTP）
+C# WPFアプリ（MCPサーバー内蔵）
+  ↓ WCF
+C++ 画像検査エンジン
+</code></pre></div>
+
+<h3 id="_4">他の構成との比較検討</h3>
+<table>
+<thead>
+<tr>
+<th>構成</th>
+<th>特徴</th>
+<th>採用可否</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MCP（採用）</td>
+<td>AIが自動でツール選択・C#UI制御も可能</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Function Calling</td>
+<td>C#をREST APIにするだけでよい</td>
+<td>△ C#UI制御に追加層が必要</td>
+</tr>
+<tr>
+<td>LangChain / LlamaIndex</td>
+<td>RAGとの統合が豊富</td>
+<td>△ 学習コスト高</td>
+</tr>
+<tr>
+<td>ルールベース</td>
+<td>高速・低コスト</td>
+<td>△ 自然言語の柔軟な解釈が不可</td>
+</tr>
+</tbody>
+</table>
+<h3 id="mcp">MCPを選んだ理由</h3>
+<ul>
+<li>AIがどのツールを呼ぶか自動判断できる（必須要件）</li>
+<li>C#アプリのWPF UIを <code>Dispatcher.Invoke</code> で直接制御できる</li>
+<li>C#側はMCPサーバーを組み込むだけで、追加の通信レイヤーが不要</li>
+<li>将来的に他のAIツールからも接続できる標準プロトコル</li>
+</ul>
+<hr />
+<h2 id="3">3. 技術スタック</h2>
+<h3 id="c">C#側</h3>
+<ul>
+<li><strong>.NET 8 / WPF</strong></li>
+<li><strong>SDK</strong>：<code>Microsoft.NET.Sdk.Web</code>（WithHttpTransport使用のため）</li>
+<li><strong>NuGet</strong>：</li>
+<li><code>ModelContextProtocol.AspNetCore 0.2.*</code></li>
+<li><code>Microsoft.Extensions.Hosting 8.*</code></li>
+<li><code>System.ServiceModel.NetNamedPipe 8.*</code></li>
+</ul>
+<h3 id="web">Webサーバー側</h3>
+<ul>
+<li><strong>Python / FastAPI</strong></li>
+<li><strong>Anthropic Python SDK</strong></li>
+<li><strong>ChromaDB</strong>（RAG用ベクトルDB）</li>
+<li><strong>sentence-transformers</strong>（Embedding）</li>
+</ul>
+<hr />
+<h2 id="4">4. ファイル構成</h2>
+<div class="codehilite"><pre><span></span><code>inspection-system/
+├── inspection-system.code-workspace   ← VS Codeで開くファイル
+├── .vscode/
+│   ├── tasks.json
+│   └── extensions.json
+│
+├── CSharpMcpServer/                   ← C# WPFアプリ
+│   ├── InspectionMcpServer.csproj
+│   ├── App.xaml / App.xaml.cs         ← MCPサーバー起動・DI設定
+│   ├── MainWindow.xaml / .cs          ← 検査結果確認UI＋マニュアルビューワー
+│   ├── InspectionViewModel.cs
+│   ├── Models/
+│   │   └── InspectionModels.cs        ← WCFコントラクト・データモデル
+│   ├── Services/
+│   │   ├── WcfInspectionClient.cs     ← WCFクライアント（自動再接続）
+│   │   └── ManualIndexService.cs      ← マニュアルキーワード検索
+│   ├── Tools/
+│   │   └── InspectionTools.cs         ← MCPツール定義（全11ツール）
+│   └── Manuals/
+│       └── manual_index.json          ← マニュアルインデックス定義
+│
+└── WebServer/                         ← Python Webサーバー
+    ├── main.py                        ← FastAPI + Claude API
+    ├── requirements.txt
+    ├── .env.example
+    ├── prompts/                       ← system_promptをファイル管理
+    │   ├── system_prompt.md
+    │   ├── rules_manual.md
+    │   └── rules_style.md
+    └── templates/
+        └── index.html                 ← チャットUI（ツール履歴パネル付き）
+</code></pre></div>
+
+<hr />
+<h2 id="5-mcp">5. MCPツール一覧</h2>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA3MjAgNDQwIiB3aWR0aD0iNzIwIiBoZWlnaHQ9IjQ0MCIgZm9udC1mYW1pbHk9IidZdSBHb3RoaWMgVUknLCAnSGlyYWdpbm8gU2FucycsIHNhbnMtc2VyaWYiPgogIDxkZWZzPgogICAgPG1hcmtlciBpZD0iYSIgdmlld0JveD0iMCAwIDEwIDEwIiByZWZYPSI4IiByZWZZPSI1IiBtYXJrZXJXaWR0aD0iNiIgbWFya2VySGVpZ2h0PSI2IiBvcmllbnQ9ImF1dG8tc3RhcnQtcmV2ZXJzZSI+CiAgICAgIDxwYXRoIGQ9Ik0yIDFMOCA1TDIgOSIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNTU1IiBzdHJva2Utd2lkdGg9IjEuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CiAgICA8L21hcmtlcj4KICAgIDxtYXJrZXIgaWQ9ImFkIiB2aWV3Qm94PSIwIDAgMTAgMTAiIHJlZlg9IjgiIHJlZlk9IjUiIG1hcmtlcldpZHRoPSI2IiBtYXJrZXJIZWlnaHQ9IjYiIG9yaWVudD0iYXV0by1zdGFydC1yZXZlcnNlIj4KICAgICAgPHBhdGggZD0iTTIgMUw4IDVMMiA5IiBmaWxsPSJub25lIiBzdHJva2U9IiM4ODgiIHN0cm9rZS13aWR0aD0iMS41IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KICAgIDwvbWFya2VyPgogIDwvZGVmcz4KICA8cmVjdCB3aWR0aD0iNzIwIiBoZWlnaHQ9IjQ0MCIgZmlsbD0iI2Y4ZjlmYSIgcng9IjEyIi8+CiAgPHRleHQgeD0iMzYwIiB5PSIzMiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxNSIgZm9udC13ZWlnaHQ9ImJvbGQiIGZpbGw9IiMxYTFhMWEiPuODgeODo+ODg+ODiOOAnOODhOODvOODq+Wun+ihjOOCt+ODvOOCseODs+OCuTwvdGV4dD4KCiAgPCEtLSDlj4LliqDogIXjg5jjg4Pjg4Djg7wgLS0+CiAgPHJlY3QgeD0iMjAiICB5PSI1MiIgd2lkdGg9IjkwIiBoZWlnaHQ9IjM0IiByeD0iNiIgZmlsbD0iI2RkZCIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjEiLz4KICA8dGV4dCB4PSI2NSIgIHk9Ijc0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzMzMyI+44OW44Op44Km44K2PC90ZXh0PgogIDxyZWN0IHg9IjE2MCIgeT0iNTIiIHdpZHRoPSIxMDAiIGhlaWdodD0iMzQiIHJ4PSI2IiBmaWxsPSIjZWRlOWZmIiBzdHJva2U9IiM3YzZmY2QiIHN0cm9rZS13aWR0aD0iMSIvPgogIDx0ZXh0IHg9IjIxMCIgeT0iNzQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjM0MzNDg5Ij5XZWLjgrXjg7zjg5Djg7w8L3RleHQ+CiAgPHJlY3QgeD0iMzEwIiB5PSI1MiIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIzNCIgcng9IjYiIGZpbGw9IiNlZGU5ZmYiIHN0cm9rZT0iIzdjNmZjZCIgc3Ryb2tlLXdpZHRoPSIxIi8+CiAgPHRleHQgeD0iMzYwIiB5PSI3NCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9ImJvbGQiIGZpbGw9IiMzQzM0ODkiPkNsYXVkZSBBUEk8L3RleHQ+CiAgPHJlY3QgeD0iNDYwIiB5PSI1MiIgd2lkdGg9IjEwMCIgaGVpZ2h0PSIzNCIgcng9IjYiIGZpbGw9IiNlOGY1ZTkiIHN0cm9rZT0iIzJkOWU1YSIgc3Ryb2tlLXdpZHRoPSIxIi8+CiAgPHRleHQgeD0iNTEwIiB5PSI3NCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiIgZm9udC13ZWlnaHQ9ImJvbGQiIGZpbGw9IiMxYTVjMzQiPk1DUOOCteODvOODkOODvDwvdGV4dD4KICA8cmVjdCB4PSI2MTAiIHk9IjUyIiB3aWR0aD0iOTAiIGhlaWdodD0iMzQiIHJ4PSI2IiBmaWxsPSIjZmZmM2NkIiBzdHJva2U9IiNlNmE4MTciIHN0cm9rZS13aWR0aD0iMSIvPgogIDx0ZXh0IHg9IjY1NSIgeT0iNzQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTIiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjN2E0ZjAwIj5DKyvjgqjjg7Pjgrjjg7M8L3RleHQ+CgogIDwhLS0g44Op44Kk44OV44Op44Kk44OzIC0tPgogIDxsaW5lIHgxPSI2NSIgIHkxPSI4NiIgeDI9IjY1IiAgeTI9IjQzMCIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjAuOCIgc3Ryb2tlLWRhc2hhcnJheT0iNCAzIi8+CiAgPGxpbmUgeDE9IjIxMCIgeTE9Ijg2IiB4Mj0iMjEwIiB5Mj0iNDMwIiBzdHJva2U9IiNiYmIiIHN0cm9rZS13aWR0aD0iMC44IiBzdHJva2UtZGFzaGFycmF5PSI0IDMiLz4KICA8bGluZSB4MT0iMzYwIiB5MT0iODYiIHgyPSIzNjAiIHkyPSI0MzAiIHN0cm9rZT0iI2JiYiIgc3Ryb2tlLXdpZHRoPSIwLjgiIHN0cm9rZS1kYXNoYXJyYXk9IjQgMyIvPgogIDxsaW5lIHgxPSI1MTAiIHkxPSI4NiIgeDI9IjUxMCIgeTI9IjQzMCIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjAuOCIgc3Ryb2tlLWRhc2hhcnJheT0iNCAzIi8+CiAgPGxpbmUgeDE9IjY1NSIgeTE9Ijg2IiB4Mj0iNjU1IiB5Mj0iNDMwIiBzdHJva2U9IiNiYmIiIHN0cm9rZS13aWR0aD0iMC44IiBzdHJva2UtZGFzaGFycmF5PSI0IDMiLz4KCiAgPCEtLSDikaAg44Om44O844K244O85YWl5YqbIC0tPgogIDxsaW5lIHgxPSI2NSIgeTE9IjExNSIgeDI9IjIwMiIgeTI9IjExNSIgc3Ryb2tlPSIjNTU1IiBzdHJva2Utd2lkdGg9IjEuNCIgbWFya2VyLWVuZD0idXJsKCNhKSIvPgogIDx0ZXh0IHg9IjEzNCIgeT0iMTA4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjMzMzIj7ikaAg6Ieq54S26KiA6Kqe44Oh44OD44K744O844K4PC90ZXh0PgoKICA8IS0tIOKRoSBDbGF1ZGUgQVBJ5ZG844Gz5Ye644GXIC0tPgogIDxsaW5lIHgxPSIyMTAiIHkxPSIxNTAiIHgyPSIzNTIiIHkyPSIxNTAiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjQiIG1hcmtlci1lbmQ9InVybCgjYSkiLz4KICA8dGV4dCB4PSIyODEiIHk9IjE0MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzMzMyI+4pGhIG1lc3NhZ2VzICsgbWNwX3NlcnZlcnM8L3RleHQ+CgogIDwhLS0g4pGiIHRvb2xzL2xpc3QgLS0+CiAgPGxpbmUgeDE9IjM2MCIgeTE9IjE4NSIgeDI9IjUwMiIgeTI9IjE4NSIgc3Ryb2tlPSIjNTU1IiBzdHJva2Utd2lkdGg9IjEuNCIgbWFya2VyLWVuZD0idXJsKCNhKSIvPgogIDx0ZXh0IHg9IjQzMSIgeT0iMTc4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjMzMzIj7ikaIgdG9vbHMvbGlzdDwvdGV4dD4KICA8bGluZSB4MT0iNTAyIiB5MT0iMjA1IiB4Mj0iMzY4IiB5Mj0iMjA1IiBzdHJva2U9IiM4ODgiIHN0cm9rZS13aWR0aD0iMS4yIiBzdHJva2UtZGFzaGFycmF5PSI0IDMiIG1hcmtlci1lbmQ9InVybCgjYWQpIi8+CiAgPHRleHQgeD0iNDM1IiB5PSIyMjAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM3NzciPuWIqeeUqOWPr+iDveODhOODvOODq+S4gOimpzwvdGV4dD4KCiAgPCEtLSDikaMgdG9vbHMvY2FsbCAtLT4KICA8bGluZSB4MT0iMzYwIiB5MT0iMjQ1IiB4Mj0iNTAyIiB5Mj0iMjQ1IiBzdHJva2U9IiM1NTUiIHN0cm9rZS13aWR0aD0iMS40IiBtYXJrZXItZW5kPSJ1cmwoI2EpIi8+CiAgPHRleHQgeD0iNDMxIiB5PSIyMzgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiMzMzMiPuKRoyB0b29scy9jYWxsIFJ1bkluc3BlY3Rpb248L3RleHQ+CgogIDwhLS0g4pGkIFdDRuWRvOOBs+WHuuOBlyAtLT4KICA8bGluZSB4MT0iNTEwIiB5MT0iMjc1IiB4Mj0iNjQ3IiB5Mj0iMjc1IiBzdHJva2U9IiM1NTUiIHN0cm9rZS13aWR0aD0iMS40IiBtYXJrZXItZW5kPSJ1cmwoI2EpIi8+CiAgPHRleHQgeD0iNTc5IiB5PSIyNjgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiMzMzMiPuKRpCBXQ0blkbzjgbPlh7rjgZc8L3RleHQ+CiAgPGxpbmUgeDE9IjY0NyIgeTE9IjI5NSIgeDI9IjUxOCIgeTI9IjI5NSIgc3Ryb2tlPSIjODg4IiBzdHJva2Utd2lkdGg9IjEuMiIgc3Ryb2tlLWRhc2hhcnJheT0iNCAzIiBtYXJrZXItZW5kPSJ1cmwoI2FkKSIvPgogIDx0ZXh0IHg9IjU4MyIgeT0iMzEwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjNzc3Ij7mpJzmn7vntZDmnpw8L3RleHQ+CgogIDwhLS0g4pGlIOODhOODvOODq+e1kOaenOi/lOWNtCAtLT4KICA8bGluZSB4MT0iNTAyIiB5MT0iMzM1IiB4Mj0iMzY4IiB5Mj0iMzM1IiBzdHJva2U9IiM4ODgiIHN0cm9rZS13aWR0aD0iMS4yIiBzdHJva2UtZGFzaGFycmF5PSI0IDMiIG1hcmtlci1lbmQ9InVybCgjYWQpIi8+CiAgPHRleHQgeD0iNDM1IiB5PSIzMjgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM3NzciPuKRpSDjg4Tjg7zjg6vlrp/ooYzntZDmnpwgSlNPTjwvdGV4dD4KCiAgPCEtLSDikaYg5b+c562U55Sf5oiQIC0tPgogIDxsaW5lIHgxPSIzNTIiIHkxPSIzNzAiIHgyPSIyMTgiIHkyPSIzNzAiIHN0cm9rZT0iIzg4OCIgc3Ryb2tlLXdpZHRoPSIxLjIiIHN0cm9rZS1kYXNoYXJyYXk9IjQgMyIgbWFya2VyLWVuZD0idXJsKCNhZCkiLz4KICA8dGV4dCB4PSIyODUiIHk9IjM2MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzc3NyI+4pGmIOiHqueEtuiogOiqnuOBp+W/nOetlOeUn+aIkDwvdGV4dD4KCiAgPCEtLSDikacg44Om44O844K244O844G46KGo56S6IC0tPgogIDxsaW5lIHgxPSIyMTAiIHkxPSI0MDUiIHgyPSI3MyIgeTI9IjQwNSIgc3Ryb2tlPSIjODg4IiBzdHJva2Utd2lkdGg9IjEuMiIgc3Ryb2tlLWRhc2hhcnJheT0iNCAzIiBtYXJrZXItZW5kPSJ1cmwoI2FkKSIvPgogIDx0ZXh0IHg9IjE0MiIgeT0iMzk4IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjNzc3Ij7ikacg5b+c562U44OG44Kt44K544OI6KGo56S6PC90ZXh0Pgo8L3N2Zz4=" width="720"/>
+<em>図2：チャット〜ツール実行シーケンス</em></p>
+<h3 id="_5">検査操作ツール</h3>
+<table>
+<thead>
+<tr>
+<th>ツール名</th>
+<th>説明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RunInspection</code></td>
+<td>画像検査を実行する</td>
+</tr>
+<tr>
+<td><code>SetThreshold</code></td>
+<td>判定閾値を設定する（0.0〜1.0）</td>
+</tr>
+<tr>
+<td><code>LoadRecipe</code></td>
+<td>検査レシピを読み込む</td>
+</tr>
+<tr>
+<td><code>GetLatestResult</code></td>
+<td>最新の検査結果を取得する</td>
+</tr>
+<tr>
+<td><code>SaveRecipe</code></td>
+<td>現在の設定をレシピとして保存する</td>
+</tr>
+<tr>
+<td><code>GetRecipeList</code></td>
+<td>保存済みレシピ一覧を取得する</td>
+</tr>
+<tr>
+<td><code>GetSystemStatus</code></td>
+<td>システムの現在状態を取得する</td>
+</tr>
+</tbody>
+</table>
+<h3 id="wpf-ui">WPF UIコントロールツール</h3>
+<table>
+<thead>
+<tr>
+<th>ツール名</th>
+<th>説明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BringWindowToFront</code></td>
+<td>C#アプリのウィンドウを前面に表示する</td>
+</tr>
+</tbody>
+</table>
+<h3 id="_6">マニュアル参照ツール</h3>
+<table>
+<thead>
+<tr>
+<th>ツール名</th>
+<th>説明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>OpenManualPage</code></td>
+<td>キーワードでマニュアルを検索してページを開く</td>
+</tr>
+<tr>
+<td><code>GetManualTableOfContents</code></td>
+<td>マニュアルの目次一覧を取得する</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6">6. ツールが見つからない場合の動作設計</h2>
+<p>AIが対応ツールを持たない操作を要求された場合の動作をsystem_promptで制御。</p>
+<div class="codehilite"><pre><span></span><code>ユーザー:「センサーのキャリブレーションをして」
+  ↓ AIがツール一覧を確認 → 該当ツールなし
+  ↓ GetManualTableOfContents で目次を取得
+  ↓ 関連ページを特定してユーザーに提案
+
+AI:「キャリブレーションについてはマニュアルの12ページに手順が記載されています。
+    ページを開きますか？」
+
+ユーザー:「開いて」
+  ↓ OpenManualPage(&quot;キャリブレーション&quot;) を呼び出し
+
+AI:「マニュアル『センサーキャリブレーション手順』(12ページ)を開きました。」
+   → C#アプリのマニュアルビューワーに表示される
+</code></pre></div>
+
+<hr />
+<h2 id="7-rag">7. RAGの設計</h2>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA3MjAgMzYwIiB3aWR0aD0iNzIwIiBoZWlnaHQ9IjM2MCIgZm9udC1mYW1pbHk9IidZdSBHb3RoaWMgVUknLCAnSGlyYWdpbm8gU2FucycsIHNhbnMtc2VyaWYiPgogIDxkZWZzPgogICAgPG1hcmtlciBpZD0iYXIiIHZpZXdCb3g9IjAgMCAxMCAxMCIgcmVmWD0iOCIgcmVmWT0iNSIgbWFya2VyV2lkdGg9IjYiIG1hcmtlckhlaWdodD0iNiIgb3JpZW50PSJhdXRvLXN0YXJ0LXJldmVyc2UiPgogICAgICA8cGF0aCBkPSJNMiAxTDggNUwyIDkiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCIvPgogICAgPC9tYXJrZXI+CiAgPC9kZWZzPgogIDxyZWN0IHdpZHRoPSI3MjAiIGhlaWdodD0iMzYwIiBmaWxsPSIjZjhmOWZhIiByeD0iMTIiLz4KICA8dGV4dCB4PSIzNjAiIHk9IjMwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE1IiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzFhMWExYSI+UkFH5qeL5oiQ77yaQVBJ5LuV5qeY5pu444Go44Oe44OL44Ol44Ki44Or44Gu566h55CG5pa55byPPC90ZXh0PgoKICA8IS0tIOW3pu+8mkFQSeS7leanmOabuCAtLT4KICA8cmVjdCB4PSIyMCIgeT0iNjAiIHdpZHRoPSIyMDAiIGhlaWdodD0iMjYwIiByeD0iMTAiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI2JiYiIgc3Ryb2tlLXdpZHRoPSIxIiBzdHJva2UtZGFzaGFycmF5PSI1IDMiLz4KICA8dGV4dCB4PSIxMjAiIHk9IjgyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjODg4Ij5BUEnku5Xmp5jmm7jvvIjlpKfopo/mqKHvvIk8L3RleHQ+CiAgPHJlY3QgeD0iMzQiIHk9IjkyIiB3aWR0aD0iMTcyIiBoZWlnaHQ9IjQwIiByeD0iNyIgZmlsbD0iI2RkZCIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjEiLz4KICA8dGV4dCB4PSIxMjAiIHk9IjExNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzMzMyI+YXBpX3NwZWMubWQ8L3RleHQ+CiAgPGxpbmUgeDE9IjEyMCIgeTE9IjEzMiIgeDI9IjEyMCIgeTI9IjE1NSIgc3Ryb2tlPSIjNTU1IiBzdHJva2Utd2lkdGg9IjEuMiIgbWFya2VyLWVuZD0idXJsKCNhcikiLz4KICA8dGV4dCB4PSIxMzAiIHk9IjE0OCIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzc3NyI+6Zai5pWw5Y2Y5L2N44Gn5YiG5YmyPC90ZXh0PgogIDxyZWN0IHg9IjM0IiB5PSIxNTUiIHdpZHRoPSIxNzIiIGhlaWdodD0iMzgiIHJ4PSI3IiBmaWxsPSIjZThmNWU5IiBzdHJva2U9IiMyZDllNWEiIHN0cm9rZS13aWR0aD0iMSIvPgogIDx0ZXh0IHg9IjEyMCIgeT0iMTcwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjMWE1YzM0Ij7jg4Hjg6Pjg7Pjgq88L3RleHQ+CiAgPHRleHQgeD0iMTIwIiB5PSIxODQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM1NTUiPumWouaVsDHjgaQgPSDjg4Hjg6Pjg7Pjgq8x44GkPC90ZXh0PgogIDxsaW5lIHgxPSIxMjAiIHkxPSIxOTMiIHgyPSIxMjAiIHkyPSIyMTUiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjIiIG1hcmtlci1lbmQ9InVybCgjYXIpIi8+CiAgPHRleHQgeD0iMTMwIiB5PSIyMDgiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM3NzciPkVtYmVkZGluZ+WkieaPmzwvdGV4dD4KICA8cmVjdCB4PSIzNCIgeT0iMjE1IiB3aWR0aD0iMTcyIiBoZWlnaHQ9IjM4IiByeD0iNyIgZmlsbD0iI2U4ZjVlOSIgc3Ryb2tlPSIjMmQ5ZTVhIiBzdHJva2Utd2lkdGg9IjEiLz4KICA8dGV4dCB4PSIxMjAiIHk9IjIzMCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzFhNWMzNCI+44OZ44Kv44OI44OrREI8L3RleHQ+CiAgPHRleHQgeD0iMTIwIiB5PSIyNDQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM1NTUiPmNvbGxlY3Rpb246IGFwaV9zcGVjPC90ZXh0PgogIDxsaW5lIHgxPSIxMjAiIHkxPSIyNTMiIHgyPSIxMjAiIHkyPSIyNzUiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjIiIG1hcmtlci1lbmQ9InVybCgjYXIpIi8+CiAgPHRleHQgeD0iMTMwIiB5PSIyNjgiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM3NzciPumhnuS8vOaknOe0ou+8iOacgOWkpzPku7bvvIk8L3RleHQ+CiAgPHJlY3QgeD0iMzQiIHk9IjI3NSIgd2lkdGg9IjE3MiIgaGVpZ2h0PSIzNCIgcng9IjciIGZpbGw9IiNlZGU5ZmYiIHN0cm9rZT0iIzdjNmZjZCIgc3Ryb2tlLXdpZHRoPSIxIi8+CiAgPHRleHQgeD0iMTIwIiB5PSIyOTciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiMzQzM0ODkiPnN5c3RlbV9wcm9tcHTjgavms6jlhaU8L3RleHQ+CgogIDwhLS0g5Lit77yaV2Vi44K144O844OQ44O8IC0tPgogIDxyZWN0IHg9IjI3MCIgeT0iMTMwIiB3aWR0aD0iMTgwIiBoZWlnaHQ9IjExMCIgcng9IjEwIiBmaWxsPSIjZWRlOWZmIiBzdHJva2U9IiM3YzZmY2QiIHN0cm9rZS13aWR0aD0iMS4yIi8+CiAgPHRleHQgeD0iMzYwIiB5PSIxNTIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTMiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjM0MzNDg5Ij5XZWLjgrXjg7zjg5Djg7w8L3RleHQ+CiAgPHRleHQgeD0iMzYwIiB5PSIxNzAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM1NTUiPuKRoCDjgq/jgqjjg6rlj5fkv6E8L3RleHQ+CiAgPHRleHQgeD0iMzYwIiB5PSIxODgiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM1NTUiPuKRoSDkuKFEQuOCkuS4puihjOaknOe0ojwvdGV4dD4KICA8dGV4dCB4PSIzNjAiIHk9IjIwNiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzU1NSI+4pGiIOe1kOaenOOCknByb21wdOOBq+azqOWFpTwvdGV4dD4KICA8dGV4dCB4PSIzNjAiIHk9IjIyNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzU1NSI+4pGjIENsYXVkZSBBUEnlkbzjgbPlh7rjgZc8L3RleHQ+CgogIDwhLS0g55+i5Y2w77ya5bemRELihpLkuK0gLS0+CiAgPGxpbmUgeDE9IjIwNiIgeTE9IjI5MiIgeDI9IjI2OCIgeTI9IjIwMCIgc3Ryb2tlPSIjNTU1IiBzdHJva2Utd2lkdGg9IjEuMiIgbWFya2VyLWVuZD0idXJsKCNhcikiLz4KCiAgPCEtLSDlj7PvvJrjg57jg4vjg6XjgqLjg6sgLS0+CiAgPHJlY3QgeD0iNTAwIiB5PSI2MCIgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyNjAiIHJ4PSIxMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjEiIHN0cm9rZS1kYXNoYXJyYXk9IjUgMyIvPgogIDx0ZXh0IHg9IjYwMCIgeT0iODIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM4ODgiPuaTjeS9nOODnuODi+ODpeOCouODq++8iOmVt+Wkp++8iTwvdGV4dD4KICA8cmVjdCB4PSI1MTQiIHk9IjkyIiB3aWR0aD0iMTcyIiBoZWlnaHQ9IjQwIiByeD0iNyIgZmlsbD0iI2RkZCIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjEiLz4KICA8dGV4dCB4PSI2MDAiIHk9IjExNyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMiIgZmlsbD0iIzMzMyI+bWFudWFsXyoucGRmPC90ZXh0PgogIDxsaW5lIHgxPSI2MDAiIHkxPSIxMzIiIHgyPSI2MDAiIHkyPSIxNTUiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjIiIG1hcmtlci1lbmQ9InVybCgjYXIpIi8+CiAgPHRleHQgeD0iNjEwIiB5PSIxNDgiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM3NzciPuaWh+Wtl+aVsOOBp+Wdh+etieWIhuWJsjwvdGV4dD4KICA8cmVjdCB4PSI1MTQiIHk9IjE1NSIgd2lkdGg9IjE3MiIgaGVpZ2h0PSIzOCIgcng9IjciIGZpbGw9IiNmZmYzY2QiIHN0cm9rZT0iI2U2YTgxNyIgc3Ryb2tlLXdpZHRoPSIxIi8+CiAgPHRleHQgeD0iNjAwIiB5PSIxNzAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM3YTRmMDAiPuODgeODo+ODs+OCrzwvdGV4dD4KICA8dGV4dCB4PSI2MDAiIHk9IjE4NCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMCIgZmlsbD0iIzU1NSI+NTAw44CcNjAw5paH5a2X44GU44GoPC90ZXh0PgogIDxsaW5lIHgxPSI2MDAiIHkxPSIxOTMiIHgyPSI2MDAiIHkyPSIyMTUiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjIiIG1hcmtlci1lbmQ9InVybCgjYXIpIi8+CiAgPHRleHQgeD0iNjEwIiB5PSIyMDgiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM3NzciPkVtYmVkZGluZ+WkieaPmzwvdGV4dD4KICA8cmVjdCB4PSI1MTQiIHk9IjIxNSIgd2lkdGg9IjE3MiIgaGVpZ2h0PSIzOCIgcng9IjciIGZpbGw9IiNmZmYzY2QiIHN0cm9rZT0iI2U2YTgxNyIgc3Ryb2tlLXdpZHRoPSIxIi8+CiAgPHRleHQgeD0iNjAwIiB5PSIyMzAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM3YTRmMDAiPuODmeOCr+ODiOODq0RCPC90ZXh0PgogIDx0ZXh0IHg9IjYwMCIgeT0iMjQ0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEwIiBmaWxsPSIjNTU1Ij5jb2xsZWN0aW9uOiBtYW51YWxzPC90ZXh0PgogIDxsaW5lIHgxPSI2MDAiIHkxPSIyNTMiIHgyPSI2MDAiIHkyPSIyNzUiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjIiIG1hcmtlci1lbmQ9InVybCgjYXIpIi8+CiAgPHRleHQgeD0iNjEwIiB5PSIyNjgiIGZvbnQtc2l6ZT0iMTAiIGZpbGw9IiM3NzciPumhnuS8vOaknOe0ou+8iOacgOWkpzLku7bvvIk8L3RleHQ+CiAgPHJlY3QgeD0iNTE0IiB5PSIyNzUiIHdpZHRoPSIxNzIiIGhlaWdodD0iMzQiIHJ4PSI3IiBmaWxsPSIjZWRlOWZmIiBzdHJva2U9IiM3YzZmY2QiIHN0cm9rZS13aWR0aD0iMSIvPgogIDx0ZXh0IHg9IjYwMCIgeT0iMjk3IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjM0MzNDg5Ij5zeXN0ZW1fcHJvbXB044Gr5rOo5YWlPC90ZXh0PgoKICA8IS0tIOefouWNsO+8muWPs0RC4oaS5LitIC0tPgogIDxsaW5lIHgxPSI1MTQiIHkxPSIyOTIiIHgyPSI0NTIiIHkyPSIyMDAiIHN0cm9rZT0iIzU1NSIgc3Ryb2tlLXdpZHRoPSIxLjIiIG1hcmtlci1lbmQ9InVybCgjYXIpIi8+Cjwvc3ZnPg==" width="720"/>
+<em>図3：RAG構成</em></p>
+<h3 id="_7">文書種別と対応方式</h3>
+<table>
+<thead>
+<tr>
+<th>文書</th>
+<th>方式</th>
+<th>理由</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>API仕様書（小〜中）</td>
+<td>system_promptに全文埋め込み</td>
+<td>関数間の依存関係も把握できる</td>
+</tr>
+<tr>
+<td>API仕様書（大）</td>
+<td>関数単位でRAG</td>
+<td>関数1つ＝チャンク1つで分割</td>
+</tr>
+<tr>
+<td>操作マニュアル</td>
+<td>文字数単位でRAG</td>
+<td>長大なため関連箇所のみ抽出</td>
+</tr>
+</tbody>
+</table>
+<h3 id="rag">RAGのチャンク戦略</h3>
+<div class="codehilite"><pre><span></span><code><span class="c1"># マニュアル：文字数で均等分割</span>
+<span class="n">split_text</span><span class="p">(</span><span class="n">text</span><span class="p">,</span> <span class="n">chunk_size</span><span class="o">=</span><span class="mi">600</span><span class="p">)</span>
+
+<span class="c1"># API仕様書：## 関数名 の見出しで分割</span>
+<span class="n">split_by_function</span><span class="p">(</span><span class="n">md_text</span><span class="p">)</span>  <span class="c1"># 関数1つ = チャンク1つ</span>
+</code></pre></div>
+
+<h3 id="_8">検索精度向上のテクニック</h3>
+<p>検索用テキストと表示用テキストを分けることで、
+「閾値を変える」→<code>SetThreshold</code> のようなキーワード不一致を防ぐ。</p>
+<div class="codehilite"><pre><span></span><code><span class="n">search_text</span>  <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;</span><span class="si">{</span><span class="n">func_name</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">alias_words</span><span class="si">}</span><span class="s2"> </span><span class="si">{</span><span class="n">description</span><span class="si">}</span><span class="s2">&quot;</span>  <span class="c1"># 幅広く</span>
+<span class="n">display_text</span> <span class="o">=</span> <span class="n">full_spec_text</span>                               <span class="c1"># 詳細</span>
+</code></pre></div>
+
+<hr />
+<h2 id="8-system_prompt">8. system_prompt管理の設計</h2>
+<h3 id="_9">課題</h3>
+<p>system_promptに直接ルールを書くと、ルール追加のたびにPythonファイルの編集とデプロイが必要になる。</p>
+<h3 id="prompt">解決策：promptをファイルで外出し管理</h3>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">load_prompt</span><span class="p">(</span><span class="o">*</span><span class="n">filenames</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+    <span class="n">base</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">dirname</span><span class="p">(</span><span class="vm">__file__</span><span class="p">),</span> <span class="s2">&quot;prompts&quot;</span><span class="p">)</span>
+    <span class="n">parts</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">name</span> <span class="ow">in</span> <span class="n">filenames</span><span class="p">:</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">base</span><span class="p">,</span> <span class="n">name</span><span class="p">)</span>
+        <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">path</span><span class="p">):</span>
+            <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">encoding</span><span class="o">=</span><span class="s2">&quot;utf-8&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
+                <span class="n">parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
+    <span class="k">return</span> <span class="s2">&quot;</span><span class="se">\n\n</span><span class="s2">&quot;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">parts</span><span class="p">)</span>
+
+<span class="n">SYSTEM_PROMPT</span> <span class="o">=</span> <span class="n">load_prompt</span><span class="p">(</span>
+    <span class="s2">&quot;system_prompt.md&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;rules_manual.md&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;rules_error.md&quot;</span><span class="p">,</span>
+    <span class="s2">&quot;rules_style.md&quot;</span><span class="p">,</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>ルールを追加するときはファイルを1つ追加するだけ。Pythonコードは触らない。</p>
+<hr />
+<h2 id="9">9. トークンコスト削減策</h2>
+<p><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA3MjAgMjgwIiB3aWR0aD0iNzIwIiBoZWlnaHQ9IjI4MCIgZm9udC1mYW1pbHk9IidZdSBHb3RoaWMgVUknLCAnSGlyYWdpbm8gU2FucycsIHNhbnMtc2VyaWYiPgogIDxyZWN0IHdpZHRoPSI3MjAiIGhlaWdodD0iMjgwIiBmaWxsPSIjZjhmOWZhIiByeD0iMTIiLz4KICA8dGV4dCB4PSIzNjAiIHk9IjMwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjE1IiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzFhMWExYSI+UHJvbXB0IENhY2hpbmfjgavjgojjgovjg4jjg7zjgq/jg7PjgrPjgrnjg4jliYrmuJs8L3RleHQ+CgogIDwhLS0g44Kt44Oj44OD44K344Ol44Gq44GXIC0tPgogIDx0ZXh0IHg9IjE4MCIgeT0iNjIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTMiIGZvbnQtd2VpZ2h0PSJib2xkIiBmaWxsPSIjZDk0ZjRmIj7jgq3jg6Pjg4Pjgrfjg6XjgarjgZc8L3RleHQ+CiAgPCEtLSDjg6rjgq/jgqjjgrnjg4gxIC0tPgogIDxyZWN0IHg9IjIwIiAgeT0iNzUiIHdpZHRoPSIxMzAiIGhlaWdodD0iMjgiIHJ4PSI1IiBmaWxsPSIjZmRlOGU4IiBzdHJva2U9IiNkOTRmNGYiIHN0cm9rZS13aWR0aD0iMS4yIi8+CiAgPHRleHQgeD0iODUiICB5PSI5NCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzhiMWExYSI+c3lzdGVtX3Byb21wdCAo5YWo6aGNKTwvdGV4dD4KICA8cmVjdCB4PSIxNTUiIHk9Ijc1IiB3aWR0aD0iODAiICBoZWlnaHQ9IjI4IiByeD0iNSIgZmlsbD0iI2RkZCIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjEiLz4KICA8dGV4dCB4PSIxOTUiIHk9Ijk0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjNTU1Ij7kvJroqbHlsaXmrbQ8L3RleHQ+CiAgPHRleHQgeD0iMjUwIiB5PSI5NCIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzg4OCI+4oaQIOODquOCr+OCqOOCueODiDE8L3RleHQ+CiAgPCEtLSDjg6rjgq/jgqjjgrnjg4gyIC0tPgogIDxyZWN0IHg9IjIwIiAgeT0iMTE1IiB3aWR0aD0iMTMwIiBoZWlnaHQ9IjI4IiByeD0iNSIgZmlsbD0iI2ZkZThlOCIgc3Ryb2tlPSIjZDk0ZjRmIiBzdHJva2Utd2lkdGg9IjEuMiIvPgogIDx0ZXh0IHg9Ijg1IiAgeT0iMTM0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjOGIxYTFhIj5zeXN0ZW1fcHJvbXB0ICjlhajpoY0pPC90ZXh0PgogIDxyZWN0IHg9IjE1NSIgeT0iMTE1IiB3aWR0aD0iODAiICBoZWlnaHQ9IjI4IiByeD0iNSIgZmlsbD0iI2RkZCIgc3Ryb2tlPSIjYmJiIiBzdHJva2Utd2lkdGg9IjEiLz4KICA8dGV4dCB4PSIxOTUiIHk9IjEzNCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzU1NSI+5Lya6Kmx5bGl5q20PC90ZXh0PgogIDx0ZXh0IHg9IjI1MCIgeT0iMTM0IiBmb250LXNpemU9IjExIiBmaWxsPSIjODg4Ij7ihpAg44Oq44Kv44Ko44K544OIMjwvdGV4dD4KICA8IS0tIOODquOCr+OCqOOCueODiDMgLS0+CiAgPHJlY3QgeD0iMjAiICB5PSIxNTUiIHdpZHRoPSIxMzAiIGhlaWdodD0iMjgiIHJ4PSI1IiBmaWxsPSIjZmRlOGU4IiBzdHJva2U9IiNkOTRmNGYiIHN0cm9rZS13aWR0aD0iMS4yIi8+CiAgPHRleHQgeD0iODUiICB5PSIxNzQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM4YjFhMWEiPnN5c3RlbV9wcm9tcHQgKOWFqOmhjSk8L3RleHQ+CiAgPHJlY3QgeD0iMTU1IiB5PSIxNTUiIHdpZHRoPSI4MCIgIGhlaWdodD0iMjgiIHJ4PSI1IiBmaWxsPSIjZGRkIiBzdHJva2U9IiNiYmIiIHN0cm9rZS13aWR0aD0iMSIvPgogIDx0ZXh0IHg9IjE5NSIgeT0iMTc0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjNTU1Ij7kvJroqbHlsaXmrbQ8L3RleHQ+CiAgPHRleHQgeD0iMjUwIiB5PSIxNzQiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM4ODgiPuKGkCDjg6rjgq/jgqjjgrnjg4gzPC90ZXh0PgoKICA8IS0tIOS7leWIh+OCiue3miAtLT4KICA8bGluZSB4MT0iMzYwIiB5MT0iNTUiIHgyPSIzNjAiIHkyPSIyMzAiIHN0cm9rZT0iI2RkZCIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4KCiAgPCEtLSDjgq3jg6Pjg4Pjgrfjg6XjgYLjgoogLS0+CiAgPHRleHQgeD0iNTQwIiB5PSI2MiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMyIgZm9udC13ZWlnaHQ9ImJvbGQiIGZpbGw9IiMyZDllNWEiPuOCreODo+ODg+OCt+ODpeOBguOCijwvdGV4dD4KICA8IS0tIOODquOCr+OCqOOCueODiDEgLS0+CiAgPHJlY3QgeD0iMzgwIiB5PSI3NSIgd2lkdGg9IjEzMCIgaGVpZ2h0PSIyOCIgcng9IjUiIGZpbGw9IiNmZGU4ZTgiIHN0cm9rZT0iI2Q5NGY0ZiIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4KICA8dGV4dCB4PSI0NDUiIHk9Ijk0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjOGIxYTFhIj5zeXN0ZW1fcHJvbXB0ICjlhajpoY0pPC90ZXh0PgogIDxyZWN0IHg9IjUxNSIgeT0iNzUiIHdpZHRoPSI4MCIgIGhlaWdodD0iMjgiIHJ4PSI1IiBmaWxsPSIjZGRkIiBzdHJva2U9IiNiYmIiIHN0cm9rZS13aWR0aD0iMSIvPgogIDx0ZXh0IHg9IjU1NSIgeT0iOTQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM1NTUiPuS8muipseWxpeattDwvdGV4dD4KICA8dGV4dCB4PSI2MTAiIHk9Ijk0IiBmb250LXNpemU9IjExIiBmaWxsPSIjODg4Ij7ihpAg44Oq44Kv44Ko44K544OIMTwvdGV4dD4KICA8IS0tIOOCreODo+ODg+OCt+ODpeS/neWtmOODnuODvOOCryAtLT4KICA8cmVjdCB4PSIzODAiIHk9IjEwNyIgd2lkdGg9IjEzMCIgaGVpZ2h0PSIxNiIgcng9IjQiIGZpbGw9IiNlOGY1ZTkiIHN0cm9rZT0iIzJkOWU1YSIgc3Ryb2tlLXdpZHRoPSIwLjgiLz4KICA8dGV4dCB4PSI0NDUiIHk9IjExOSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSI5IiBmaWxsPSIjMWE1YzM0Ij7imIUg44Kt44Oj44OD44K344Ol5L+d5a2Y77yINeWIhumWk+acieWKue+8iTwvdGV4dD4KICA8IS0tIOODquOCr+OCqOOCueODiDIgLS0+CiAgPHJlY3QgeD0iMzgwIiB5PSIxMzAiIHdpZHRoPSIxMzAiIGhlaWdodD0iMjgiIHJ4PSI1IiBmaWxsPSIjZThmNWU5IiBzdHJva2U9IiMyZDllNWEiIHN0cm9rZS13aWR0aD0iMS4yIi8+CiAgPHRleHQgeD0iNDQ1IiB5PSIxNDkiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiMxYTVjMzQiPnN5c3RlbV9wcm9tcHQgKOe0hDEwJSk8L3RleHQ+CiAgPHJlY3QgeD0iNTE1IiB5PSIxMzAiIHdpZHRoPSI4MCIgIGhlaWdodD0iMjgiIHJ4PSI1IiBmaWxsPSIjZGRkIiBzdHJva2U9IiNiYmIiIHN0cm9rZS13aWR0aD0iMSIvPgogIDx0ZXh0IHg9IjU1NSIgeT0iMTQ5IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjExIiBmaWxsPSIjNTU1Ij7kvJroqbHlsaXmrbQ8L3RleHQ+CiAgPHRleHQgeD0iNjEwIiB5PSIxNDkiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM4ODgiPuKGkCDjg6rjgq/jgqjjgrnjg4gyPC90ZXh0PgogIDwhLS0g44Oq44Kv44Ko44K544OIMyAtLT4KICA8cmVjdCB4PSIzODAiIHk9IjE2OCIgd2lkdGg9IjEzMCIgaGVpZ2h0PSIyOCIgcng9IjUiIGZpbGw9IiNlOGY1ZTkiIHN0cm9rZT0iIzJkOWU1YSIgc3Ryb2tlLXdpZHRoPSIxLjIiLz4KICA8dGV4dCB4PSI0NDUiIHk9IjE4NyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzFhNWMzNCI+c3lzdGVtX3Byb21wdCAo57SEMTAlKTwvdGV4dD4KICA8cmVjdCB4PSI1MTUiIHk9IjE2OCIgd2lkdGg9IjgwIiAgaGVpZ2h0PSIyOCIgcng9IjUiIGZpbGw9IiNkZGQiIHN0cm9rZT0iI2JiYiIgc3Ryb2tlLXdpZHRoPSIxIi8+CiAgPHRleHQgeD0iNTU1IiB5PSIxODciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZvbnQtc2l6ZT0iMTEiIGZpbGw9IiM1NTUiPuS8muipseWxpeattDwvdGV4dD4KICA8dGV4dCB4PSI2MTAiIHk9IjE4NyIgZm9udC1zaXplPSIxMSIgZmlsbD0iIzg4OCI+4oaQIOODquOCr+OCqOOCueODiDM8L3RleHQ+CgogIDwhLS0g5YmK5rib546HIC0tPgogIDxyZWN0IHg9IjM4MCIgeT0iMjEwIiB3aWR0aD0iMzIwIiBoZWlnaHQ9IjMwIiByeD0iNiIgZmlsbD0iI2U4ZjVlOSIgc3Ryb2tlPSIjMmQ5ZTVhIiBzdHJva2Utd2lkdGg9IjEuMiIvPgogIDx0ZXh0IHg9IjU0MCIgeT0iMjMwIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmb250LXNpemU9IjEyIiBmb250LXdlaWdodD0iYm9sZCIgZmlsbD0iIzFhNWMzNCI+MuWbnuebruS7pemZjeOBrnN5c3RlbV9wcm9tcHTjgrPjgrnjg4jvvJrntIQ5MCXliYrmuJs8L3RleHQ+Cjwvc3ZnPg==" width="720"/>
+<em>図4：Prompt Cachingによるコスト削減</em></p>
+<h3 id="_10">課題</h3>
+<p>毎リクエストでsystem_prompt（ルール全体）を送るとinput_tokensコストが増大する。</p>
+<h3 id="_11">解決策の比較</h3>
+<table>
+<thead>
+<tr>
+<th>アプローチ</th>
+<th>効果</th>
+<th>実装コスト</th>
+<th>向いている場面</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ルール階層化（動的追加）</td>
+<td>中</td>
+<td>低</td>
+<td>ルール数が少ない</td>
+</tr>
+<tr>
+<td><strong>Prompt Caching（推奨）</strong></td>
+<td><strong>高（約90%削減）</strong></td>
+<td><strong>低（1行追加）</strong></td>
+<td><strong>同じルールを繰り返す</strong></td>
+</tr>
+<tr>
+<td>ルールをMCPツール化</td>
+<td>最高</td>
+<td>中</td>
+<td>ルール数が多く増え続ける</td>
+</tr>
+</tbody>
+</table>
+<h3 id="prompt-caching1">Prompt Cachingの実装（コード1行の追加）</h3>
+<div class="codehilite"><pre><span></span><code><span class="n">response</span> <span class="o">=</span> <span class="n">client</span><span class="o">.</span><span class="n">beta</span><span class="o">.</span><span class="n">messages</span><span class="o">.</span><span class="n">create</span><span class="p">(</span>
+    <span class="n">model</span><span class="o">=</span><span class="s2">&quot;claude-sonnet-4-6&quot;</span><span class="p">,</span>
+    <span class="n">system</span><span class="o">=</span><span class="p">[</span>
+        <span class="p">{</span>
+            <span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;text&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">SYSTEM_PROMPT</span><span class="p">,</span>
+            <span class="s2">&quot;cache_control&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;type&quot;</span><span class="p">:</span> <span class="s2">&quot;ephemeral&quot;</span><span class="p">}</span>  <span class="c1"># ← これだけ追加</span>
+        <span class="p">}</span>
+    <span class="p">],</span>
+    <span class="n">messages</span><span class="o">=</span><span class="n">messages</span><span class="p">,</span>
+    <span class="n">mcp_servers</span><span class="o">=</span><span class="p">[</span><span class="o">...</span><span class="p">],</span>
+    <span class="n">betas</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;mcp-client-2025-04-04&quot;</span><span class="p">,</span> <span class="s2">&quot;prompt-caching-2024-07-31&quot;</span><span class="p">],</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>キャッシュは5分間有効。5分以内に次のリクエストがあれば自動延長。</p>
+<h3 id="_12">推奨ロードマップ</h3>
+<div class="codehilite"><pre><span></span><code>現在   → Prompt Caching を有効化（即日対応可・効果大）
+将来   → ルール数が増えてきたらMCPツール化を組み合わせる
+</code></pre></div>
+
+<hr />
+<h2 id="10">10. 起動手順</h2>
+<div class="codehilite"><pre><span></span><code><span class="c"># 1. C++エンジン（WCFサービス）を起動</span>
+
+<span class="c"># 2. C# WPFアプリをビルド・起動</span>
+<span class="nb">cd </span><span class="n">CSharpMcpServer</span>
+<span class="n">dotnet</span> <span class="n">run</span>
+<span class="c"># → WPFウィンドウに「MCPサーバー待ち受け中 (port 5050)」と表示されればOK</span>
+
+<span class="c"># 3. Webサーバーを起動</span>
+<span class="nb">cd </span><span class="n">WebServer</span>
+<span class="nb">cp </span><span class="p">.</span><span class="n">env</span><span class="p">.</span><span class="n">example</span> <span class="p">.</span><span class="n">env</span>   <span class="c"># ANTHROPIC_API_KEY を記入</span>
+<span class="n">pip</span> <span class="n">install</span> <span class="n">-r</span> <span class="n">requirements</span><span class="p">.</span><span class="n">txt</span>
+<span class="n">python</span> <span class="n">main</span><span class="p">.</span><span class="n">py</span>
+
+<span class="c"># 4. ブラウザで http://localhost:8000 にアクセス</span>
+</code></pre></div>
+
+<h3 id="mcp_1">動作確認（MCPサーバーへの疎通確認）</h3>
+<div class="codehilite"><pre><span></span><code>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:5050/mcp<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{&quot;jsonrpc&quot;:&quot;2.0&quot;,&quot;method&quot;:&quot;tools/list&quot;,&quot;params&quot;:{},&quot;id&quot;:1}&#39;</span>
+</code></pre></div>
+
+<hr />
+<h2 id="11">11. カスタマイズポイント</h2>
+<table>
+<thead>
+<tr>
+<th>項目</th>
+<th>ファイル</th>
+<th>変数・場所</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>WCFエンドポイント</td>
+<td><code>App.xaml.cs</code></td>
+<td><code>WcfEndpoint</code></td>
+</tr>
+<tr>
+<td>MCPポート番号</td>
+<td><code>App.xaml.cs</code></td>
+<td><code>McpPort</code></td>
+</tr>
+<tr>
+<td>MCPサーバーURL</td>
+<td><code>WebServer/.env</code></td>
+<td><code>MCP_SERVER_URL</code></td>
+</tr>
+<tr>
+<td>AIへの基本指示</td>
+<td><code>WebServer/prompts/system_prompt.md</code></td>
+<td>ファイル直接編集</td>
+</tr>
+<tr>
+<td>ツールが見つからない時のルール</td>
+<td><code>WebServer/prompts/rules_manual.md</code></td>
+<td>ファイル直接編集</td>
+</tr>
+<tr>
+<td>マニュアルインデックス</td>
+<td><code>CSharpMcpServer/Manuals/manual_index.json</code></td>
+<td>JSON直接編集</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+</body>
+</html>
